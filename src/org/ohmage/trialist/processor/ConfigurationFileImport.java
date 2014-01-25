@@ -6,8 +6,6 @@ import java.io.FileReader;
 import java.io.IOException;
 import java.util.Properties;
 
-import org.apache.log4j.Logger;
-
 /**
  * <p>
  * Attempts to read the configuration file, if it exists, and stores it. Any
@@ -24,13 +22,7 @@ public class ConfigurationFileImport {
 	 */
 	private static final String CONFIG_FILE_DEFAULT = 
 		"./conf/default.properties";
-	
-	/**
-	 * The logger for this class.
-	 */
-	private static final Logger LOGGER =
-		Logger.getLogger(ConfigurationFileImport.class);
-	
+		
 	/**
 	 * The properties merged between the defaults and the custom ones.
 	 */

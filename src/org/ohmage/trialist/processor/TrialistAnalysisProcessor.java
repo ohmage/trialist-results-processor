@@ -13,6 +13,7 @@ import org.apache.commons.dbcp.BasicDataSource;
 import org.apache.log4j.Logger;
 import org.apache.log4j.PropertyConfigurator;
 import org.joda.time.DateTime;
+import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
 import org.springframework.dao.DataAccessException;
@@ -37,7 +38,7 @@ import org.springframework.jdbc.core.RowMapper;
  */
 public class TrialistAnalysisProcessor {
 	private static final Logger LOGGER = Logger.getLogger(TrialistAnalysisProcessor.class);
-	private static final String CAMPAIGN_URN = "urn:campaign:trialist";
+	private static final String CAMPAIGN_URN = "urn:campaign:trialist:old:3"; //"urn:campaign:trialist";
 	private int numberOfTrialsProcessed = 0;
 	private boolean reprocessTrials;
 	private boolean reprocessAllTrials;
@@ -202,22 +203,27 @@ public class TrialistAnalysisProcessor {
 					if(userSurveyDate.getSurveyId().equals("start")) {
 						// Calculate the user's trial end date based on the setup config and the start date
 						try {
-							int cycleDuration = regimenDurationInDays(currentSetupSurvey.getInt("regimenDuration")) * 2;
-							int numberOfCycles = numberOfCycles(currentSetupSurvey.getInt("numberComparisonCycles"));
-							int totalDays = cycleDuration * numberOfCycles;
+							int cycleDuration = regimenDurationInDays(getIntValueForPromptId(currentSetupSurvey, "regimenDuration")) * 2;
+							int numberOfCycles = numberOfCycles(getIntValueForPromptId(currentSetupSurvey, "numberComparisonCycles"));
+							
+							int totalDays = cycleDuration * numberOfCycles - 1; // subtract 1 to make the start date inclusive to the trial
+							
+							// FIXME: this should be retrieving the value from the start date survey
 							DateTime startDateTime = new DateTime(userSurveyDate.getSurvey().getLong("time"));
 							// plusDays() is actually converting startDateTime to the trial end date.
 							startDateTime = startDateTime.plusDays(totalDays);
 							userTrialEndDateList.add(new UserTrialEndDate(currentUserId, startDateTime));
 							
-						} catch (JSONException jsonException) { // TODO break out the JSON exception handling so the error message can be more informative
-							LOGGER.error("Missing key in setup survey -- there is a corrupt setup survey response in the db.");
-							throw new IllegalStateException(jsonException);
+						} catch (JSONException jsonException) { 
+							LOGGER.error("Malformed setup survey found in the database. JSON: " + currentSetupSurvey, jsonException);
+							LOGGER.info("The survey is being skipped in order to process other completed trials.");
+							continue;
 						}	
 					}
 				} else {
 					if(userSurveyDate.getSurveyId().equals("setup")) {
 						currentUserId = userSurveyDate.getUserId();
+						currentSetupSurvey = userSurveyDate.getSurvey();
 					} else { // The user has changed, but their first survey is not the setup survey, so just reset
 						currentUserId = -1;
 					}
@@ -262,6 +268,24 @@ public class TrialistAnalysisProcessor {
 		} else {
 			throw new IllegalArgumentException("Unknown key for number of cycles: " + key);
 		}
+	}
+	
+	/**
+	 * Returns the integer value for a prompt ID present in the survey object.  
+	 * 
+	 * @param surveyObject - An ohmage survey JSON object
+	 * @return the number of days per regiment for this particular survey
+	 */
+	private int getIntValueForPromptId(JSONObject surveyObject, String promptId) throws JSONException {
+		// Grab the responses array and then find the prompt response object that contains the key given by promptId
+		JSONArray responses = (JSONArray) surveyObject.get("responses");
+		int numberOfResponses = responses.length();
+		for(int i = 0; i < numberOfResponses; i++) {
+			if(responses.getJSONObject(i).getString("prompt_id").equals(promptId)) {
+				return responses.getJSONObject(i).getInt("value");
+			}
+		}
+		throw new JSONException("The responses array did not contain a response object for the prompt ID " + promptId);	
 	}
 	
 	/**
