@@ -2,10 +2,10 @@ package org.ohmage.trialist.processor;
 
 import java.sql.ResultSet;
 import java.sql.SQLException;
-import java.text.ParsePosition;
-import java.text.SimpleDateFormat;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Date;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Properties;
 
@@ -13,6 +13,8 @@ import org.apache.commons.dbcp.BasicDataSource;
 import org.apache.log4j.Logger;
 import org.apache.log4j.PropertyConfigurator;
 import org.joda.time.DateTime;
+import org.joda.time.DateTimeZone;
+import org.joda.time.format.ISODateTimeFormat;
 import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
@@ -38,20 +40,32 @@ import org.springframework.jdbc.core.RowMapper;
  */
 public class TrialistAnalysisProcessor {
 	private static final Logger LOGGER = Logger.getLogger(TrialistAnalysisProcessor.class);
+	
+	// The default campaign to process
 	private static final String CAMPAIGN_URN = "urn:campaign:trialist:old:3"; //"urn:campaign:trialist";
-	private int numberOfTrialsProcessed = 0;
+	
+	// Parameters to main to customize processing
 	private boolean reprocessTrials;
 	private boolean reprocessAllTrials;
-	private Date dateTrialEnded;
+	private DateTime dateTrialEnded;
+	private DateTime yesterday;
 	private String campaignUrn;
+	
+	// Program execution info
+	private int numberOfTrialsProcessed = 0;
+	
+	// Database connectivity
 	private JdbcTemplate jdbcTemplate;
 	
 	// Retrieve all setup and start surveys for all users for a given trialist campaign
 	private String SQL_SELECT_TRIAL_SETUP_AND_START = 
-		"SELECT id, user_id, survey_id, epoch_millis, survey " +
+		"SELECT id, user_id, survey_id, survey " +
 		"FROM survey_response " +
 		"WHERE campaign_id = (SELECT id FROM campaign WHERE urn = ?) " +
 			"AND survey_id IN ('start', 'setup') ORDER BY user_id, epoch_millis";
+	
+	// Lazily retrieve all of the processed trials. In practice, this should return a max of fewer than 500 rows 
+	private String SQL_SELECT_PROCESSED_TRIALS = "SELECT DISTINCT user_id, setup_survey_response_id from trialist_processed_trial";
 	
 	/**
 	 * Create a processor that will process the previous day's completed trials for the default Trialist campaign.
@@ -59,7 +73,8 @@ public class TrialistAnalysisProcessor {
 	public TrialistAnalysisProcessor() {
 		reprocessTrials = false;
 		reprocessAllTrials = false;
-		dateTrialEnded = new Date(System.currentTimeMillis() - 8640000);
+		dateTrialEnded = new DateTime(System.currentTimeMillis() - 8640000).withZone(DateTimeZone.forID("UTC")).withTime(0, 0, 0, 0);
+		yesterday = new DateTime(System.currentTimeMillis() - 8640000).withZone(DateTimeZone.forID("UTC")).withTime(0, 0, 0, 0);
 		campaignUrn = CAMPAIGN_URN;
 		LOGGER.info("Processing trials for the campaign " + campaignUrn + " and trial end date " + dateTrialEnded);
 	}
@@ -77,11 +92,15 @@ public class TrialistAnalysisProcessor {
 	 * @param date - the date indicating the trial end date: only trials ending on this date will be processed
 	 * @param urn - the campaign URN to use 
 	 */
-	public TrialistAnalysisProcessor(boolean reprocess, boolean reprocessAll, Date date, String urn) {
+	public TrialistAnalysisProcessor(boolean reprocess, boolean reprocessAll, DateTime date, String urn) {
 		reprocessTrials = reprocess;
 		reprocessAllTrials = reprocessAll;
 		dateTrialEnded = date;
+		yesterday = new DateTime(System.currentTimeMillis() - 8640000).withZone(DateTimeZone.forID("UTC")).withTime(0, 0, 0, 0);
 		campaignUrn = urn;
+		
+		LOGGER.info("Processing trials for campaign " + campaignUrn + " and for end date " + dateTrialEnded 
+				+ " reprocessTrials is " + reprocessTrials + " and reprocessAllTrials is " + reprocessAllTrials);
 	}	
 	
 	/**
@@ -118,7 +137,8 @@ public class TrialistAnalysisProcessor {
 		//    "metadata": {
 		//        "regimen_a":["Tylenol", "Complementary treatment: including but not limited to physical activity (exercise, stretching, yoga), mindfulness (meditation, relaxation, music therapy)"],
 		//        "regimen_b":["Hydrocodone combination product (e.g., Vicodin, Norco)"],
-		//        "trial_start_timestamp":"2013-11-01T12:00:00.000-08:00",
+		//        "trial_start_date":"2013-11-01",
+		//        "trial_end_date":"2013-11-01",
 		//        "regimen_duration":7,
 		//        "number_of_cycles":4,
 		//        "cycle_ab_pairs":"AB,AB"
@@ -151,10 +171,34 @@ public class TrialistAnalysisProcessor {
 		// Now when Marc queries ohmage, he can ask for both the massaged intermediate representation (3a) and the results 
 		// from 3d.
 		
-		// First, grab each setup survey response and each start survey response. Determine if the user's trial is over 
+		// Find all processed trials to handling filtering in case case trial reprocessing is not desired
+		List<ProcessedTrial> processedTrials = null;
+
+		try {
+			processedTrials = jdbcTemplate.query(
+				SQL_SELECT_PROCESSED_TRIALS, 
+				new RowMapper<ProcessedTrial>() {
+					@Override
+					public ProcessedTrial mapRow(ResultSet rs, int rowNum) throws SQLException {
+						return new ProcessedTrial(rs.getLong("user_id"), rs.getLong("setup_survey_response_id"));
+					}
+				}
+			);
+			
+		} catch (DataAccessException dataAccessException) {
+			LOGGER.error("An error occurred when accessing the database.");
+			throw dataAccessException;
+		}
+		
+		if(processedTrials == null) {
+			processedTrials = Collections.<ProcessedTrial>emptyList();
+		}
+		
+		// Grab each setup survey response and each start survey response. Determine if the user's trial is over 
 		// based on the trial length defined in the setup response, the time at which the user started, and the trial end date 
 		// this program is configured to use.
 		List<UserSurveyDate> userSetupStartList = null;
+		
 		try { 
 			userSetupStartList = jdbcTemplate.query(
 				SQL_SELECT_TRIAL_SETUP_AND_START, 
@@ -171,25 +215,28 @@ public class TrialistAnalysisProcessor {
 							throw new SQLException(jsonException);
 						}
 						
-						return new UserSurveyDate(rs.getLong("user_id"), rs.getString("survey_id"), rs.getLong("epoch_millis"), survey);
+						return new UserSurveyDate(rs.getLong("id"), rs.getLong("user_id"), rs.getString("survey_id"), survey);
 					}
 				}
 			);
 		} catch (DataAccessException dataAccessException) {
-			LOGGER.error("Something bad happened when trying to access the database.");
+			LOGGER.error("An error occurred when accessing the database.");
 			throw dataAccessException;
 		}
 		
-		LOGGER.info("Found " + (userSetupStartList == null ? " 0 " : userSetupStartList.size()) + " setup and start survey responses");
+		if(userSetupStartList == null) {
+			userSetupStartList = Collections.<UserSurveyDate>emptyList();
+		}
+		
+		LOGGER.info("Found " + userSetupStartList.size() + " setup and start survey responses");
 		
 	    // Now determine each user's trial end date
 		
-		// Either process all trials that have ended or trials that have ended on the end date provided to this program
-		
-		long currentUserId = -1; // assume we'll never have a negative primary key
+		long currentUserId = -1;                 // assume we'll never have a negative primary key
+		long currentSetupSurveyPrimaryKey = -1;  // ditto
 		JSONObject currentSetupSurvey = null;
 		
-		List<UserTrialEndDate> userTrialEndDateList = new ArrayList<UserTrialEndDate>();
+		List<UserTrial> userTrials = new ArrayList<UserTrial>();
 		
 		for(UserSurveyDate userSurveyDate : userSetupStartList) {
 			if(currentUserId == -1)	{
@@ -197,22 +244,58 @@ public class TrialistAnalysisProcessor {
 				if(userSurveyDate.getSurveyId().equals("setup")) {
 					currentUserId = userSurveyDate.getUserId();
 					currentSetupSurvey = userSurveyDate.getSurvey();
+					currentSetupSurveyPrimaryKey = userSurveyDate.getSurveyPrimaryKey();
 				} 
 			} else {
 				if(currentUserId == userSurveyDate.getUserId()) {
 					if(userSurveyDate.getSurveyId().equals("start")) {
 						// Calculate the user's trial end date based on the setup config and the start date
 						try {
+							// Multiply by 2 because each regimen duration is half a cycle
 							int cycleDuration = regimenDurationInDays(getIntValueForPromptId(currentSetupSurvey, "regimenDuration")) * 2;
 							int numberOfCycles = numberOfCycles(getIntValueForPromptId(currentSetupSurvey, "numberComparisonCycles"));
 							
-							int totalDays = cycleDuration * numberOfCycles - 1; // subtract 1 to make the start date inclusive to the trial
+							// NOTE: JodaTime requires the long version of the timezone ID. It will accept America/Los_Angeles, but 
+							// reject Etc/GMT-8 or PST. The latter formats will cause an IllegalArgumentException.
+							// Trialist-MWF (phone app) uses a JavaScript library to generate long timezone IDs and ohmage
+							// server uses JodaTime to validate timezone input for survey responses, so a malformed timezone 
+							// should never occur
+							DateTimeZone startDateTimeZone  = null;
 							
-							// FIXME: this should be retrieving the value from the start date survey
-							DateTime startDateTime = new DateTime(userSurveyDate.getSurvey().getLong("time"));
-							// plusDays() is actually converting startDateTime to the trial end date.
-							startDateTime = startDateTime.plusDays(totalDays);
-							userTrialEndDateList.add(new UserTrialEndDate(currentUserId, startDateTime));
+							try {
+								
+								startDateTimeZone = DateTimeZone.forID(userSurveyDate.getSurvey().getString("timezone"));
+								
+							} catch (IllegalArgumentException unknownTimeZone) {
+								// This means that somehow the server app persisted a timezone that Joda cannot parse. 
+								// Just Skip the response and log the incorrectly formatted data.
+								LOGGER.warn("Found a start survey with a timezone that JodaTime cannot parse. The value is: " 
+										+ userSurveyDate.getSurvey().getString("timezone"));
+								continue;
+							}
+
+							// The user's timezone needs to be provided as the second parameter otherwise JodaTime will default to
+							// the timezone of the machine this program is running on. After the DateTime is created, the time 
+							// and timezone fields are normalized because only the date portion of the DateTime will be needed
+							// for later processing.
+							DateTime startDateTime = new DateTime(
+								getStringValueForPromptId(userSurveyDate.getSurvey(), "startPrompt"), startDateTimeZone)
+									.withZone(DateTimeZone.forID("UTC"))
+									.withTime(0, 0, 0, 0);
+							
+							// The phone app saves the start date as the current day if the current local time is before
+							// 8:00pm and the next day if it is after 8:00pm, so no need to handle the time here 
+							
+							// Subtract 1 to make the start date inclusive to the trial end date calculation
+							int totalDays = cycleDuration * numberOfCycles - 1; 
+							
+							// Calculate the end date, strip out the time, and set the tz to UTC because this value is only used in
+							// an equals() comparison with another yyyy-mm-dd UTC date.
+							DateTime endDateTime = startDateTime.plusDays(totalDays)
+								.withZone(DateTimeZone.forID("UTC"))
+								.withTime(0, 0, 0, 0);
+							
+							userTrials.add(new UserTrial(currentUserId, startDateTime, endDateTime, currentSetupSurvey, currentSetupSurveyPrimaryKey)); 
 							
 						} catch (JSONException jsonException) { 
 							LOGGER.error("Malformed setup survey found in the database. JSON: " + currentSetupSurvey, jsonException);
@@ -231,10 +314,27 @@ public class TrialistAnalysisProcessor {
 			}
 		}
 		
-		// TODO - Test on opilots to verify the end date calculation and the setup / start survey processing
-		for(UserTrialEndDate userTrialEndDate : userTrialEndDateList) {
-			LOGGER.info(userTrialEndDate.toString());
+		for(UserTrial userTrial : userTrials) {
+			LOGGER.info(userTrial.toString());
 		}
+		
+		// Filter out all trials that should not be processed
+		
+		List<UserTrial> trialsToProcess = filterTrialsForReprocessing(filterTrialsByDate(userTrials), processedTrials);
+ 		
+		LOGGER.info(trialsToProcess.size() + " trials will be processed");
+		
+		for(UserTrial userTrial : trialsToProcess) {
+			LOGGER.info(userTrial.toString());
+		}
+		
+		// Create and persist the intermediate data format.
+		
+		// Pass to DPU.
+		
+		// Persist DPU results.
+		
+		// Mark trial as processed.
 		
 	}
 	
@@ -272,9 +372,6 @@ public class TrialistAnalysisProcessor {
 	
 	/**
 	 * Returns the integer value for a prompt ID present in the survey object.  
-	 * 
-	 * @param surveyObject - An ohmage survey JSON object
-	 * @return the number of days per regiment for this particular survey
 	 */
 	private int getIntValueForPromptId(JSONObject surveyObject, String promptId) throws JSONException {
 		// Grab the responses array and then find the prompt response object that contains the key given by promptId
@@ -286,6 +383,73 @@ public class TrialistAnalysisProcessor {
 			}
 		}
 		throw new JSONException("The responses array did not contain a response object for the prompt ID " + promptId);	
+	}
+
+	/**
+	 * Returns the String value for a prompt ID present in the survey object.   
+	 */
+	private String getStringValueForPromptId(JSONObject surveyObject, String promptId) throws JSONException {
+		// Grab the responses array and then find the prompt response object that contains the key given by promptId
+		JSONArray responses = (JSONArray) surveyObject.get("responses");
+		int numberOfResponses = responses.length();
+		for(int i = 0; i < numberOfResponses; i++) {
+			if(responses.getJSONObject(i).getString("prompt_id").equals(promptId)) {
+				return responses.getJSONObject(i).getString("value");
+			}
+		}
+		throw new JSONException("The responses array did not contain a response object for the prompt ID " + promptId);	
+	}
+	
+	
+	/**
+	 * Returns a list of user trials that should be processed based the trial end date parameter and whether reprocessAllTrials 
+	 * is true.
+	 */
+	private List<UserTrial> filterTrialsByDate(List<UserTrial> trialsToCheck) {
+		if(trialsToCheck == null || trialsToCheck.isEmpty()) {
+			return Collections.<UserTrial>emptyList();
+		}
+		
+		List<UserTrial> trialsToProcess = new ArrayList<UserTrial>();
+		
+		for(UserTrial userTrial : trialsToCheck) {
+			// Don't process trials that are not finished yet
+			if(userTrial.getTrialEndDate().compareTo(yesterday) <= 0) {
+				 
+				if(reprocessAllTrials) {
+					// Any finished trial will be processed
+					trialsToProcess.add(userTrial);
+					
+				} else {
+					// Otherwise only trials ending on end date parameter to this program will be processed
+					if(userTrial.getTrialEndDate().equals(dateTrialEnded)) {
+						trialsToProcess.add(userTrial);
+					}
+				}	
+			}
+		}
+		
+		return trialsToProcess;
+	}
+	
+	/**
+	 * If reprocessTrials is false, this method filters out any trial that has already been processed. 
+	 */
+	private List<UserTrial> filterTrialsForReprocessing(List<UserTrial> trialsToCheck, List<ProcessedTrial> processedTrials) { 
+		if(! reprocessTrials) {
+			// Use an iterator because the list might be modified as it is traversed
+			Iterator<UserTrial> iterator = trialsToCheck.iterator();
+			while(iterator.hasNext()) {
+				UserTrial userTrial = iterator.next();
+				if(processedTrials.contains(new ProcessedTrial(userTrial.getUserId(), userTrial.getSetupSurveyPrimaryKey()))) {
+					iterator.remove();
+				}
+			}
+			return trialsToCheck;
+			
+		} else {
+			return trialsToCheck;
+		}
 	}
 	
 	/**
@@ -350,7 +514,7 @@ public class TrialistAnalysisProcessor {
 				boolean reprocess = false;
 				boolean reprocessAll = false;
 				String trialEndDateString = null;
-				Date trialEndDate = null;
+				DateTime trialEndDate = null;
 				String campaignUrn = null;
 				
 				try {
@@ -376,14 +540,12 @@ public class TrialistAnalysisProcessor {
 
 				try {
 					trialEndDateString = parameters.getString("trial-end-date");
-					SimpleDateFormat simpleDateFormat = new SimpleDateFormat("yyyy-MM-dd");
-					simpleDateFormat.setLenient(false);
-					trialEndDate = simpleDateFormat.parse(trialEndDateString, new ParsePosition(0));
 					
-					if(trialEndDate == null) {
-						LOGGER.error("Could not parse trial-end-date as a date of the form yyyy-mm-dd");
-						return;
-					}
+					// This will throw an IllegalArgumentException if the date string is not parseable
+					trialEndDate = ISODateTimeFormat.yearMonthDay().parseDateTime(trialEndDateString)
+						.withZone(DateTimeZone.forID("UTC"))
+						.withTime(0, 0, 0, 0);
+					
 				} catch (JSONException jsonException) {
 					LOGGER.error("String value missing for the key 'trial-end-date'.");
 					return;
@@ -438,18 +600,18 @@ public class TrialistAnalysisProcessor {
 	}
 	
 	/**
-	 * Utility POJO for user setup and start survey chronology. 
+	 * Domain object for participant setup and start surveys. 
 	 */
 	private static class UserSurveyDate {
+		private long surveyPrimaryKey;
 		private long userId;
 		private String surveyId;
-		private long epochMillis;
 		private JSONObject survey;
 		
-		public UserSurveyDate(final long pUserId, final String pSurveyId, final long pEpochMillis, final JSONObject pSurvey) {
+		public UserSurveyDate(final long pSurveyPrimaryKey, final long pUserId, final String pSurveyId, final JSONObject pSurvey) {
+			surveyPrimaryKey = pSurveyPrimaryKey;
 			userId = pUserId;
 			surveyId = pSurveyId;
-			epochMillis = pEpochMillis;
 			survey = pSurvey;
 		}
 		
@@ -460,9 +622,9 @@ public class TrialistAnalysisProcessor {
 		public String getSurveyId() {
 			return surveyId;
 		}
-
-		public long getEpochMillis() {
-			return epochMillis;
+		
+		public long getSurveyPrimaryKey() {
+			return surveyPrimaryKey;
 		}
 
 		public JSONObject getSurvey() {
@@ -471,29 +633,96 @@ public class TrialistAnalysisProcessor {
 	}
 
 	/**
-	 * Utility POJO for a user's trial end date. 
+	 * Domain object for a user's trial data. 
 	 */
-	private static class UserTrialEndDate {
+	private static class UserTrial {
 		private long userId;
+		private DateTime trialStartDate;
 		private DateTime trialEndDate;
+		private JSONObject setupSurvey;
+		private long setupSurveyPrimaryKey;
 		
-		public UserTrialEndDate(final long pUserId, final DateTime pTrialEndDate) {
+		public UserTrial(final long pUserId, final DateTime pTrialStartDate, final DateTime pTrialEndDate, JSONObject pSetupSurvey, final long pSetupSurveyPrimaryKey) {
 			userId = pUserId;
+			trialStartDate = pTrialStartDate;
 			trialEndDate = pTrialEndDate;
+			setupSurvey = pSetupSurvey;
+			setupSurveyPrimaryKey = pSetupSurveyPrimaryKey;
 		}
 
 		public long getUserId() {
 			return userId;
 		}
 
+		public DateTime getTrialStartDate() {
+			return trialStartDate;
+		}
+
 		public DateTime getTrialEndDate() {
 			return trialEndDate;
 		}
 
+		public JSONObject getSetupSurvey() {
+			return setupSurvey;
+		}
+
+		public long getSetupSurveyPrimaryKey() {
+			return setupSurveyPrimaryKey;
+		}
+		
+		// Omitted setupSurveyPrimary key for less verbose debugging
 		@Override
 		public String toString() {
-			return "UserTrialEndDate [userId=" + userId + ", trialEndDate="
-					+ trialEndDate + "]";
+			return "UserTrial [userId=" + userId + ", trialStartDate="
+					+ trialStartDate + ", trialEndDate=" + trialEndDate
+					/*+ ", setupSurvey=" + setupSurvey*/ + "]";
+		}	
+	}
+	
+	/**
+	 * Domain object representation of a row in the trialist_processed_trial table.
+	 */
+	private static class ProcessedTrial {
+		private long userId;
+		private long surveyPrimaryKey;
+		
+		public ProcessedTrial(final long pUserId, final long pSurveyPrimaryKey) {
+			userId = pUserId;
+			surveyPrimaryKey = pSurveyPrimaryKey;	
+		}
+
+		public long getUserId() {
+			return userId;
+		}
+
+		public long getSurveyPrimaryKey() {
+			return surveyPrimaryKey;
+		}
+
+		@Override
+		public int hashCode() {
+			final int prime = 31;
+			int result = 1;
+			result = prime * result
+					+ (int) (surveyPrimaryKey ^ (surveyPrimaryKey >>> 32));
+			result = prime * result + (int) (userId ^ (userId >>> 32));
+			return result;
+		}
+
+		@Override
+		public boolean equals(Object obj) {
+			if (this == obj)
+				return true;
+			if (obj == null)
+				return false;
+			if (getClass() != obj.getClass())
+				return false;
+			ProcessedTrial other = (ProcessedTrial) obj;
+			if (surveyPrimaryKey != other.surveyPrimaryKey)
+				return false;
+			if (userId != other.userId)
+				return false;
+			return true;
 		}
 	}
 }
