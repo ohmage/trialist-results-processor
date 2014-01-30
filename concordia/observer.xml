@@ -1,0 +1,650 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<observer>
+    <id>io.omh.trialist</id>
+    <version>2013013000</version>
+
+    <name>Trialist Analysis Streams</name>
+    <description>The Trialist analysis streams are described by two schemas. One schema defines a normalized list of ohmage
+    self-report data points and the other defines a list of objects pertaining to post-trial analysis for six patient outcomes.
+    </description>
+    <versionString>1.0</versionString>
+
+    <stream>
+        <id>data</id>
+        <version>2013013000</version>
+
+        <name>Trialist Data Points</name>
+        <description>A list of self-report data points with metadata for providing context to the list.</description>
+
+        <metadata>
+            <timestamp />
+        </metadata>
+
+        <schema>
+{
+    "type":"object",
+    "doc":"Contains a Trialist participant's setup metadata as well as their self-report results.",
+    "fields": [
+        {
+            "name":"metadata",
+            "type":"object",
+            "doc":"Information about the participants trial setup.",
+            "fields": [
+                {
+                    "name":"regimen_a",
+                    "type":"array",
+                    "doc":"The regimens that make up this participant's A period in a trial cycle.",
+                    "constType": {
+                        "type":"string"    
+                    }
+                },
+                {
+                    "name":"regimen_b",
+                    "type":"array",
+                    "doc":"The regimens that make up this participant's B period in a trial cycle.",
+                    "constType": {
+                        "type":"string"    
+                    }
+                },
+                {
+                    "name":"trial_start_date",
+                    "type":"string",
+                    "doc":"The start date for this participant's trial. The value is a W3C ISO8601 complete date."
+                },
+                {
+                    "name":"trial_end_date",
+                    "type":"string",
+                    "doc":"The end date for this participant's trial. The value is a W3C ISO8601 complete date."
+                },
+                {
+                    "name":"regimen_duration",
+                    "type":"number",
+                    "doc":"The number of days the participant is on a particular regimen."
+                },
+                {
+                    "name":"number_of_cycles",
+                    "type":"number",
+                    "doc":"The number of cycles setup for this participant's trial."
+                },
+                {
+                    "name":"cycle_ab_pairs",
+                    "type":"string",
+                    "doc":"A comma-separated list of two AB or BA pairs. The possible values are 'AB,AB' 'BA,AB' 'AB,BA' 'BA,BA'. The AB pairs are repeated for each cycle. E.g., if the there are four cycles the pair repeats four times."
+                }
+            ]
+        },
+        {
+            "name":"data",
+            "type":"array",
+            "doc":"An array of data points generated from a participant's self-report. Each data point also contains the timestamp at which it was created, the current regimen and the current cycle.",
+            "constType": {
+                "type":"object",
+                "doc":"The definition for a Trialist data point.",
+                "fields": [
+                    {
+                        "name":"timestamp",
+                        "type":"string",
+                        "doc":"A timestamp indicated when this data point was generated. The format is a W3C ISO8601 complete date plus hours, minutes, seconds and a decimal fraction of a second."    
+                    },
+                    {
+                        "name":"regimen",
+                        "type":"string",
+                        "doc":"The value A or B indicating the current regimen."
+                    },
+                    {
+                        "name":"cycle",
+                        "type":"number",
+                        "doc":"A whole number between 1 and 4 indicating the current cycle."
+                    },
+                    {
+                        "name":"averagePainIntensity",
+                        "type":"number",
+                        "doc":"A whole number between 0 and 10 where 0 represents no pain and 10 represents the worst pain imaginable during the past 24 hours."
+                    },
+                    {
+                        "name":"enjoymentOfLife",
+                        "type":"number",
+                        "doc":"A whole number between 0 and 10 where 0 represents no pain interference in the participant's enjoyment of life and 10 represents complete interference during the past 24 hours."
+                    },
+                    {
+                        "name":"generalActivity",
+                        "type":"number",
+                        "doc":"A whole number between 0 and 10 where 0 represents no pain interference with the participant's general activity and 10 represents complete interference during the past 24 hours."
+                    },
+                    {
+                        "name":"fatiguePrompt",
+                        "type":"number",
+                        "doc":"A whole number between 1 and 5 where 1 represents no fatigue and 5 represents a lot of fatigue in the past 24 hours."
+                    },
+                    {
+                        "name":"drowsinessPrompt",
+                        "type":"number",
+                        "doc":"A whole number between 1 and 6 where 1 represents no drowsiness and 6 represents drowsiness all the time for the current day."
+                    },
+                    {
+                        "name":"constipationPrompt",
+                        "type":"number",
+                        "doc":"A whole number between 1 and 5 where 1 represents no constipation and 5 represents a lot of constipation over the last 24 hours."
+                    },
+                    {
+                        "name":"cognitiveFunctionFoggyThinkingPrompt",
+                        "optional":true,
+                        "type":"number",
+                        "doc":"A whole number between 1 and 5 where 1 represents no occurence of foggy thinking and 5 represents many occurences of foggy thinking in the last 24 hours. Only one of cognitiveFunctionFoggyThinkingPrompt or cognitiveFunctionWorkingHarderPrompt will be present for a given data point."
+                    },
+                    {
+                        "name":"cognitiveFunctionWorkingHarderPrompt",
+                        "optional":true,
+                        "type":"number",
+                        "doc":"A whole number between 1 and 5 where 1 represents no occurence of the participant having to work hard to keep track of what they're doing and and 5 represents many occurences of the participant having to work hard to keep track of what they're doing in the last 24 hours. Only one of cognitiveFunctionFoggyThinkingPrompt or cognitiveFunctionWorkingHarderPrompt will be present for a given data point."
+                    },
+                    {
+                        "name":"painSharpness",
+                        "optional":true,
+                        "type":"number",
+                        "doc":"A whole number between 0 and 10 where 0 represents no sharpness in the patient's pain and 10 represents 'like a knife'. painSharpness, painHotness and painSensitivity will either all be present or none will be present."
+                    },
+                    {
+                        "name":"painHotness",
+                        "optional":true,
+                        "type":"number",
+                        "doc":"A whole number between 0 and 10 where 0 represents no heat in the patient's pain and 10 represents 'on fire'. painSharpness, painHotness and painSensitivity will either all be present or none will be present."
+                    },
+                    {
+                        "name":"painSensitivity",
+                        "optional":true,
+                        "type":"number",
+                        "doc":"A whole number between 0 and 10 where 0 represents no senstivity to touch in the patient's pain and 10 represents 'like raw or sunburned skin'. painSharpness, painHotness and painSensitivity will either all be present or none will be present."
+                    },
+                    {
+                        "name":"sleepDisturbancePrompt",
+                        "type":"number",
+                        "doc":"A whole number between 0 and 5 where 0 represents very poor sleep quality and very good sleep quality for the previous night."
+                    }
+                ]    
+            }
+        }
+    ]
+}
+    
+        </schema>
+    </stream>
+
+    <stream>
+        <id>results</id>
+        <version>2013013000</version>
+
+        <name>Trialist Analysis Results</name>
+        <description>Contains a map of outcomes to analysis results for each.</description>
+
+        <metadata>
+            <timestamp />
+        </metadata>
+
+        <schema>
+{
+    "type":"object",
+    "doc":"Contains a Trialist participant's outcome analysis.",
+    "fields": [
+        {
+            "name":"pain",
+            "doc":"The analysis results for the pain outcome. NOTE: because ohmage 2.16 is being used for the Trialist project, Concordia $ref values cannot be used. This is why graph_5 and graph_6 are redundantly defined in this schema.",
+            "type":"object", 
+            "fields": [
+                {
+                    "name":"successful_run",
+                    "type":"boolean",
+                    "doc":"Indicates whether the analysis software could calculate something other than a toss-up between the regimens for this outcome."
+                },
+                {
+                    "name":"graph_5",
+                    "type":"object",
+                    "doc":"The values to be rendered in graph five for the pain outcome." ,     
+                    "fields" : [
+                        {
+                            "name":"more_effective_regimen",
+                            "type":"string",
+                            "doc":"Will be one of A or B"
+                        },
+                        {
+                            "name":"median_effect",
+                            "type":"number",
+                            "doc":"A number between 0 and 100. The increase in effectiveness of more_effective_regimen compared to the other regimen. Describes the median of a range of possible comparisons between the two regimens calculated through a 95% confidence interval."
+                        },
+                        {
+                            "name":"upper_bound",
+                            "type":"number",
+                            "doc":"A number between 0 and 100. The maximum comparative advantage A can have over B or the minimum comparative advantage B can have over A. Represents a percent."
+                        },
+                        {
+                            "name":"upper_bound_regimen",
+                            "type":"string",
+                            "doc":"If A, upper_bound is the maximum comparative advantage of A over B; if B, upper_bound is the minimum comparative advantage of B over A."
+                        },
+                        {
+                            "name":"lower_bound",
+                            "type":"number",
+                            "doc":"The maximum comparative advantage B can have over A or the minimum comparative advantage A can have over B. Represents a percent."
+                        },
+                        {
+                            "name":"lower_bound_regimen",
+                            "type":"string",
+                            "doc":"If A, lower_bound is the minimum comparative advantage of A over B; if B, lower_bound is the maximum comparative advantage of B over A."
+                        }  
+                    ]
+                },
+                {
+                    "name":"graph_6",
+                    "type":"object",
+                    "doc":"The values to be rendered in graph six for the pain outcome.",
+                    "fields": [
+                        {
+                            "name":"b_clinically_better",
+                            "type":"number",
+                            "doc":"A value between 0 and 100. Probability that regimen B is at least 20% more effective than regimen A. Represents a percent."
+                        },
+                        {
+                            "name":"b_marginally_better",
+                            "type":"number",
+                            "doc":"A value between 0 and 100. Probability that regimen B is more effective than regimen A, but by less than 20%. Represents a percent."
+                        },
+                        {
+                            "name":"a_clinically_better",
+                            "type":"number",
+                            "doc":"A value between 0 and 100. Probability that regimen A is at least 20% more effective than regimen B. Represents a percent."
+                        },
+                        {
+                            "name":"a_marginally_better",
+                            "type":"number",
+                            "doc":"A value between 0 and 100. Probability that regimen A is more effective than regimen B, but by less than 20%. Represents a percent."
+                        }   
+                    ]
+                }
+            ]
+        },
+        {
+            "name":"sleep_problems",
+            "doc":"The analysis results for the sleep problems outcome.",
+            "type":"object", 
+            "fields": [
+                {
+                    "name":"successful_run",
+                    "type":"boolean",
+                    "doc":"Indicates whether the analysis software could calculate something other than a toss-up between the regimens for this outcome."
+                },
+                {
+                    "name":"graph_5",
+                    "type":"object",
+                    "doc":"The values to be rendered in graph five for the sleep problems outcome.",       
+                    "fields" : [
+                        {
+                            "name":"more_effective_regimen",
+                            "type":"string",
+                            "doc":"Will be one of A or B"
+                        },
+                        {
+                            "name":"median_effect",
+                            "type":"number",
+                            "doc":"A number between 0 and 100. The increase in effectiveness of more_effective_regimen compared to the other regimen. Describes the median of a range of possible comparisons between the two regimens calculated through a 95% confidence interval."
+                        },
+                        {
+                            "name":"upper_bound",
+                            "type":"number",
+                            "doc":"A number between 0 and 100. The maximum comparative advantage A can have over B or the minimum comparative advantage B can have over A. Represents a percent."
+                        },
+                        {
+                            "name":"upper_bound_regimen",
+                            "type":"string",
+                            "doc":"If A, upper_bound is the maximum comparative advantage of A over B; if B, upper_bound is the minimum comparative advantage of B over A."
+                        },
+                        {
+                            "name":"lower_bound",
+                            "type":"number",
+                            "doc":"The maximum comparative advantage B can have over A or the minimum comparative advantage A can have over B. Represents a percent."
+                        },
+                        {
+                            "name":"lower_bound_regimen",
+                            "type":"string",
+                            "doc":"If A, lower_bound is the minimum comparative advantage of A over B; if B, lower_bound is the maximum comparative advantage of B over A."
+                        }  
+                    ]
+                },
+                {
+                    "name":"graph_6",
+                    "type":"object",
+                    "doc":"The values to be rendered in graph six for the sleep problems outcome.",
+                    "fields": [
+                        {
+                            "name":"b_clinically_better",
+                            "type":"number",
+                            "doc":"A value between 0 and 100. Probability that regimen B is at least 20% more effective than regimen A. Represents a percent."
+                        },
+                        {
+                            "name":"b_marginally_better",
+                            "type":"number",
+                            "doc":"A value between 0 and 100. Probability that regimen B is more effective than regimen A, but by less than 20%. Represents a percent."
+                        },
+                        {
+                            "name":"a_clinically_better",
+                            "type":"number",
+                            "doc":"A value between 0 and 100. Probability that regimen A is at least 20% more effective than regimen B. Represents a percent."
+                        },
+                        {
+                            "name":"a_marginally_better",
+                            "type":"number",
+                            "doc":"A value between 0 and 100. Probability that regimen A is more effective than regimen B, but by less than 20%. Represents a percent."
+                        }   
+                    ]
+                }
+            ]
+        },
+        {
+            "name":"constipation",
+            "doc":"The analysis results for the constipation outcome.",
+            "type":"object", 
+            "fields": [
+                {
+                    "name":"successful_run",
+                    "type":"boolean",
+                    "doc":"Indicates whether the analysis software could calculate something other than a toss-up between the regimens for this outcome."
+                },
+                {
+                    "name":"graph_5",
+                    "type":"object",
+                    "doc":"The values to be rendered in graph five for the constipation outcome.",       
+                    "fields" : [
+                        {
+                            "name":"more_effective_regimen",
+                            "type":"string",
+                            "doc":"Will be one of A or B"
+                        },
+                        {
+                            "name":"median_effect",
+                            "type":"number",
+                            "doc":"A number between 0 and 100. The increase in effectiveness of more_effective_regimen compared to the other regimen. Describes the median of a range of possible comparisons between the two regimens calculated through a 95% confidence interval."
+                        },
+                        {
+                            "name":"upper_bound",
+                            "type":"number",
+                            "doc":"A number between 0 and 100. The maximum comparative advantage A can have over B or the minimum comparative advantage B can have over A. Represents a percent."
+                        },
+                        {
+                            "name":"upper_bound_regimen",
+                            "type":"string",
+                            "doc":"If A, upper_bound is the maximum comparative advantage of A over B; if B, upper_bound is the minimum comparative advantage of B over A."
+                        },
+                        {
+                            "name":"lower_bound",
+                            "type":"number",
+                            "doc":"The maximum comparative advantage B can have over A or the minimum comparative advantage A can have over B. Represents a percent."
+                        },
+                        {
+                            "name":"lower_bound_regimen",
+                            "type":"string",
+                            "doc":"If A, lower_bound is the minimum comparative advantage of A over B; if B, lower_bound is the maximum comparative advantage of B over A."
+                        }  
+                    ]
+                },
+                {
+                    "name":"graph_6",
+                    "type":"object",
+                    "doc":"The values to be rendered in graph six for the constipation outcome.",
+                    "fields": [
+                        {
+                            "name":"b_clinically_better",
+                            "type":"number",
+                            "doc":"A value between 0 and 100. Probability that regimen B is at least 20% more effective than regimen A. Represents a percent."
+                        },
+                        {
+                            "name":"b_marginally_better",
+                            "type":"number",
+                            "doc":"A value between 0 and 100. Probability that regimen B is more effective than regimen A, but by less than 20%. Represents a percent."
+                        },
+                        {
+                            "name":"a_clinically_better",
+                            "type":"number",
+                            "doc":"A value between 0 and 100. Probability that regimen A is at least 20% more effective than regimen B. Represents a percent."
+                        },
+                        {
+                            "name":"a_marginally_better",
+                            "type":"number",
+                            "doc":"A value between 0 and 100. Probability that regimen A is more effective than regimen B, but by less than 20%. Represents a percent."
+                        }   
+                    ]
+                }
+            ]
+        },
+        {
+            "name":"drowsiness",
+            "doc":"The analysis results for the drowsiness outcome.",
+            "type":"object", 
+            "fields": [
+                {
+                    "name":"successful_run",
+                    "type":"boolean",
+                    "doc":"Indicates whether the analysis software could calculate something other than a toss-up between the regimens for this outcome."
+                },
+                {
+                    "name":"graph_5",
+                    "type":"object",
+                    "doc":"The values to be rendered in graph five for the drowsiness outcome.",  
+                    "fields" : [
+                        {
+                            "name":"more_effective_regimen",
+                            "type":"string",
+                            "doc":"Will be one of A or B"
+                        },
+                        {
+                            "name":"median_effect",
+                            "type":"number",
+                            "doc":"A number between 0 and 100. The increase in effectiveness of more_effective_regimen compared to the other regimen. Describes the median of a range of possible comparisons between the two regimens calculated through a 95% confidence interval."
+                        },
+                        {
+                            "name":"upper_bound",
+                            "type":"number",
+                            "doc":"A number between 0 and 100. The maximum comparative advantage A can have over B or the minimum comparative advantage B can have over A. Represents a percent."
+                        },
+                        {
+                            "name":"upper_bound_regimen",
+                            "type":"string",
+                            "doc":"If A, upper_bound is the maximum comparative advantage of A over B; if B, upper_bound is the minimum comparative advantage of B over A."
+                        },
+                        {
+                            "name":"lower_bound",
+                            "type":"number",
+                            "doc":"The maximum comparative advantage B can have over A or the minimum comparative advantage A can have over B. Represents a percent."
+                        },
+                        {
+                            "name":"lower_bound_regimen",
+                            "type":"string",
+                            "doc":"If A, lower_bound is the minimum comparative advantage of A over B; if B, lower_bound is the maximum comparative advantage of B over A."
+                        }  
+                    ]
+                },
+                {
+                    "name":"graph_6",
+                    "type":"object",
+                    "doc":"The values to be rendered in graph six for the drowsiness outcome.",
+                    "fields": [
+                        {
+                            "name":"b_clinically_better",
+                            "type":"number",
+                            "doc":"A value between 0 and 100. Probability that regimen B is at least 20% more effective than regimen A. Represents a percent."
+                        },
+                        {
+                            "name":"b_marginally_better",
+                            "type":"number",
+                            "doc":"A value between 0 and 100. Probability that regimen B is more effective than regimen A, but by less than 20%. Represents a percent."
+                        },
+                        {
+                            "name":"a_clinically_better",
+                            "type":"number",
+                            "doc":"A value between 0 and 100. Probability that regimen A is at least 20% more effective than regimen B. Represents a percent."
+                        },
+                        {
+                            "name":"a_marginally_better",
+                            "type":"number",
+                            "doc":"A value between 0 and 100. Probability that regimen A is more effective than regimen B, but by less than 20%. Represents a percent."
+                        }   
+                    ]
+                }
+            ]
+        },
+        {
+            "name":"fatigue",
+            "doc":"The analysis results for the fatigue outcome.",
+            "type":"object", 
+            "fields": [
+                {
+                    "name":"successful_run",
+                    "type":"boolean",
+                    "doc":"Indicates whether the analysis software could calculate something other than a toss-up between the regimens for this outcome."
+                },
+                {
+                    "name":"graph_5",
+                    "type":"object",
+                    "doc":"The values to be rendered in graph five for the fatigue outcome.",    
+                    "fields" : [
+                        {
+                            "name":"more_effective_regimen",
+                            "type":"string",
+                            "doc":"Will be one of A or B"
+                        },
+                        {
+                            "name":"median_effect",
+                            "type":"number",
+                            "doc":"A number between 0 and 100. The increase in effectiveness of more_effective_regimen compared to the other regimen. Describes the median of a range of possible comparisons between the two regimens calculated through a 95% confidence interval."
+                        },
+                        {
+                            "name":"upper_bound",
+                            "type":"number",
+                            "doc":"A number between 0 and 100. The maximum comparative advantage A can have over B or the minimum comparative advantage B can have over A. Represents a percent."
+                        },
+                        {
+                            "name":"upper_bound_regimen",
+                            "type":"string",
+                            "doc":"If A, upper_bound is the maximum comparative advantage of A over B; if B, upper_bound is the minimum comparative advantage of B over A."
+                        },
+                        {
+                            "name":"lower_bound",
+                            "type":"number",
+                            "doc":"The maximum comparative advantage B can have over A or the minimum comparative advantage A can have over B. Represents a percent."
+                        },
+                        {
+                            "name":"lower_bound_regimen",
+                            "type":"string",
+                            "doc":"If A, lower_bound is the minimum comparative advantage of A over B; if B, lower_bound is the maximum comparative advantage of B over A."
+                        }  
+                    ]
+                },
+                {
+                    "name":"graph_6",
+                    "type":"object",
+                    "doc":"The values to be rendered in graph six for the fatigue outcome.",
+                    "fields": [
+                        {
+                            "name":"b_clinically_better",
+                            "type":"number",
+                            "doc":"A value between 0 and 100. Probability that regimen B is at least 20% more effective than regimen A. Represents a percent."
+                        },
+                        {
+                            "name":"b_marginally_better",
+                            "type":"number",
+                            "doc":"A value between 0 and 100. Probability that regimen B is more effective than regimen A, but by less than 20%. Represents a percent."
+                        },
+                        {
+                            "name":"a_clinically_better",
+                            "type":"number",
+                            "doc":"A value between 0 and 100. Probability that regimen A is at least 20% more effective than regimen B. Represents a percent."
+                        },
+                        {
+                            "name":"a_marginally_better",
+                            "type":"number",
+                            "doc":"A value between 0 and 100. Probability that regimen A is more effective than regimen B, but by less than 20%. Represents a percent."
+                        }   
+                    ]
+                }
+            ]
+        },
+        {
+            "name":"neuropathic_pain",
+            "optional":true,
+            "doc":"The analysis results for the optional neuropathic pain outcome.",
+            "type":"object", 
+            "fields": [
+                {
+                    "name":"successful_run",
+                    "type":"boolean",
+                    "doc":"Indicates whether the analysis software could calculate something other than a toss-up between the regimens for this outcome."
+                },
+                {
+                    "name":"graph_5",
+                    "type":"object",
+                    "doc":"The values to be rendered in graph five for the neuropathic pain outcome.",
+                    "fields" : [
+                        {
+                            "name":"more_effective_regimen",
+                            "type":"string",
+                            "doc":"Will be one of A or B"
+                        },
+                        {
+                            "name":"median_effect",
+                            "type":"number",
+                            "doc":"A number between 0 and 100. The increase in effectiveness of more_effective_regimen compared to the other regimen. Describes the median of a range of possible comparisons between the two regimens calculated through a 95% confidence interval."
+                        },
+                        {
+                            "name":"upper_bound",
+                            "type":"number",
+                            "doc":"A number between 0 and 100. The maximum comparative advantage A can have over B or the minimum comparative advantage B can have over A. Represents a percent."
+                        },
+                        {
+                            "name":"upper_bound_regimen",
+                            "type":"string",
+                            "doc":"If A, upper_bound is the maximum comparative advantage of A over B; if B, upper_bound is the minimum comparative advantage of B over A."
+                        },
+                        {
+                            "name":"lower_bound",
+                            "type":"number",
+                            "doc":"The maximum comparative advantage B can have over A or the minimum comparative advantage A can have over B. Represents a percent."
+                        },
+                        {
+                            "name":"lower_bound_regimen",
+                            "type":"string",
+                            "doc":"If A, lower_bound is the minimum comparative advantage of A over B; if B, lower_bound is the maximum comparative advantage of B over A."
+                        }  
+                    ]
+                },
+                {
+                    "name":"graph_6",
+                    "type":"object",
+                    "doc":"The values to be rendered in graph six for the neuropathic pain outcome.",
+                    "fields": [
+                        {
+                            "name":"b_clinically_better",
+                            "type":"number",
+                            "doc":"A value between 0 and 100. Probability that regimen B is at least 20% more effective than regimen A. Represents a percent."
+                        },
+                        {
+                            "name":"b_marginally_better",
+                            "type":"number",
+                            "doc":"A value between 0 and 100. Probability that regimen B is more effective than regimen A, but by less than 20%. Represents a percent."
+                        },
+                        {
+                            "name":"a_clinically_better",
+                            "type":"number",
+                            "doc":"A value between 0 and 100. Probability that regimen A is at least 20% more effective than regimen B. Represents a percent."
+                        },
+                        {
+                            "name":"a_marginally_better",
+                            "type":"number",
+                            "doc":"A value between 0 and 100. Probability that regimen A is more effective than regimen B, but by less than 20%. Represents a percent."
+                        }   
+                    ]
+                }
+            ]
+        }                                        
+    ]
+}
+        </schema>
+    </stream>
+</observer>
