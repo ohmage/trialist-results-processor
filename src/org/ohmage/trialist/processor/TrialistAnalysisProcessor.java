@@ -14,6 +14,8 @@ import org.apache.log4j.Logger;
 import org.apache.log4j.PropertyConfigurator;
 import org.joda.time.DateTime;
 import org.joda.time.DateTimeZone;
+import org.joda.time.format.DateTimeFormatter;
+import org.joda.time.format.DateTimeFormatterBuilder;
 import org.joda.time.format.ISODateTimeFormat;
 import org.json.JSONArray;
 import org.json.JSONException;
@@ -44,9 +46,17 @@ public class TrialistAnalysisProcessor {
 	// The default campaign to process
 	private static final String CAMPAIGN_URN = "urn:campaign:trialist:old:3"; //"urn:campaign:trialist";
 	
-	// Parameters to main to customize processing
-	private boolean reprocessTrials;
-	private boolean reprocessAllTrials;
+	// The observer stream metadata for storing normalized self-report and final analysis data
+	private static final String OBSERVER_ID = "io.omh.trialist";
+	private static final String OBSERVER_VERSION = "2013013000";
+	private static final String DATA_STREAM_ID = "data";
+	private static final String ANALYSIS_RESULTS_STREAM_ID = "results";
+	private static final String DATA_STREAM_VERSION = "2013013000";
+	private static final String ANALYSIS_RESULTS_STREAM_VERSION = "2013013000";
+	
+	// Processing customization
+	private boolean alsoReprocessTrials;
+	private boolean alsoReprocessAllTrials;
 	private DateTime dateTrialEnded;
 	private DateTime yesterday;
 	private String campaignUrn;
@@ -58,21 +68,53 @@ public class TrialistAnalysisProcessor {
 	private JdbcTemplate jdbcTemplate;
 	
 	// Retrieve all setup and start surveys for all users for a given trialist campaign
-	private String SQL_SELECT_TRIAL_SETUP_AND_START = 
+	private static final String SQL_SELECT_TRIAL_SETUP_AND_START = 
 		"SELECT id, user_id, survey_id, survey " +
 		"FROM survey_response " +
 		"WHERE campaign_id = (SELECT id FROM campaign WHERE urn = ?) " +
 			"AND survey_id IN ('start', 'setup') ORDER BY user_id, epoch_millis";
 	
-	// Lazily retrieve all of the processed trials. In practice, this should return a max of fewer than 500 rows 
-	private String SQL_SELECT_PROCESSED_TRIALS = "SELECT DISTINCT user_id, setup_survey_response_id from trialist_processed_trial";
+	// Lazily retrieve all of the processed trials. In practice, this should return a max of fewer than 500 rows.
+	// DISTINCT is used because the trial results can be processed many times.
+	private static final String SQL_SELECT_PROCESSED_TRIALS 
+		= "SELECT DISTINCT user_id, setup_survey_response_id from trialist_processed_trial";
 	
+	// Find any normalized trial results
+//	private static final String SQL_SELECT_TRIALIST_STREAM_DATA_POINTS 
+//		= "SELECT user_id, data FROM observer_stream_data where observer_stream_link_id = " +
+//			"(SELECT osl.id FROM observer_stream_link osl, observer_stream os, observer o WHERE " +
+//			"o.id = osl.observer_id AND os.id = osl.observer_stream_id and o.observer_id = " + OBSERVER_ID +
+//			" AND o.version = " + OBSERVER_VERSION + " AND os.stream_id = " + DATA_STREAM_ID + " AND " +
+//			"os.version = " + DATA_STREAM_VERSION + ")"; 
+	
+	// Find any normalized trial results 
+	private static final String SQL_SELECT_TRIALIST_STREAM_DATA_POINTS 
+		= "SELECT data FROM observer_stream_data " +
+			"LEFT JOIN observer_stream_link ON observer_stream_link_id = observer_stream_link.id " +
+			"LEFT JOIN observer ON observer_stream_link.observer_id = observer.id " +
+			"LEFT JOIN observer_stream ON observer_stream_link.observer_stream_id = observer_stream.id " +
+			"WHERE observer.observer_id = " + OBSERVER_ID + 
+			" AND observer.version = " + OBSERVER_VERSION +
+			" AND observer_stream.stream_id = " + DATA_STREAM_ID + 
+			" AND observer_stream.version = " + DATA_STREAM_VERSION + 
+			" AND observer_stream_data.user_id = ?";
+	
+	// Get all of the Trialist main surveys for a given user. "main" is the name given to the daily self-report survey in Trialist
+	private static final String SQL_SELECT_MAIN_SURVEY_PROMPT_RESPONSES_FOR_USER =
+		"SELECT pr.prompt_id, pr.response, sr.epoch_millis " +
+		"FROM prompt_response pr, survey_response sr " +
+		"WHERE pr.survey_response_id = sr.id " +
+			"AND sr.survey_id = 'main' " +
+			"AND sr.campaign_id = (SELECT id FROM campaign where urn = '" + CAMPAIGN_URN + "') " +
+			"AND DATE(FROM_UNIXTIME(sr.epoch_millis / 1000)) BETWEEN ? AND ? " +
+			"AND sr.user_id = ?";
+			
 	/**
 	 * Create a processor that will process the previous day's completed trials for the default Trialist campaign.
 	 */
 	public TrialistAnalysisProcessor() {
-		reprocessTrials = false;
-		reprocessAllTrials = false;
+		alsoReprocessTrials = false;
+		alsoReprocessAllTrials = false;
 		dateTrialEnded = new DateTime(System.currentTimeMillis() - 8640000).withZone(DateTimeZone.forID("UTC")).withTime(0, 0, 0, 0);
 		yesterday = new DateTime(System.currentTimeMillis() - 8640000).withZone(DateTimeZone.forID("UTC")).withTime(0, 0, 0, 0);
 		campaignUrn = CAMPAIGN_URN;
@@ -93,14 +135,14 @@ public class TrialistAnalysisProcessor {
 	 * @param urn - the campaign URN to use 
 	 */
 	public TrialistAnalysisProcessor(boolean reprocess, boolean reprocessAll, DateTime date, String urn) {
-		reprocessTrials = reprocess;
-		reprocessAllTrials = reprocessAll;
+		alsoReprocessTrials = reprocess;
+		alsoReprocessAllTrials = reprocessAll;
 		dateTrialEnded = date;
 		yesterday = new DateTime(System.currentTimeMillis() - 8640000).withZone(DateTimeZone.forID("UTC")).withTime(0, 0, 0, 0);
 		campaignUrn = urn;
 		
 		LOGGER.info("Processing trials for campaign " + campaignUrn + " and for end date " + dateTrialEnded 
-				+ " reprocessTrials is " + reprocessTrials + " and reprocessAllTrials is " + reprocessAllTrials);
+				+ " reprocessTrials is " + alsoReprocessTrials + " and reprocessAllTrials is " + alsoReprocessAllTrials);
 	}	
 	
 	/**
@@ -173,6 +215,11 @@ public class TrialistAnalysisProcessor {
 		
 		// Find all processed trials to handling filtering in case case trial reprocessing is not desired
 		List<ProcessedTrial> processedTrials = null;
+		
+		// Date formatter to strip off times and timezones from dates
+		DateTimeFormatterBuilder builder = new DateTimeFormatterBuilder();
+		builder.append(ISODateTimeFormat.yearMonthDay().getPrinter(), ISODateTimeFormat.yearMonthDay().getParser());
+		DateTimeFormatter yearMonthDayFormatter = builder.toFormatter().withZoneUTC();
 
 		try {
 			processedTrials = jdbcTemplate.query(
@@ -268,7 +315,7 @@ public class TrialistAnalysisProcessor {
 								
 							} catch (IllegalArgumentException unknownTimeZone) {
 								// This means that somehow the server app persisted a timezone that Joda cannot parse. 
-								// Just Skip the response and log the incorrectly formatted data.
+								// Just skip the response and log the incorrectly formatted data.
 								LOGGER.warn("Found a start survey with a timezone that JodaTime cannot parse. The value is: " 
 										+ userSurveyDate.getSurvey().getString("timezone"));
 								continue;
@@ -319,16 +366,147 @@ public class TrialistAnalysisProcessor {
 		}
 		
 		// Filter out all trials that should not be processed
-		
 		List<UserTrial> trialsToProcess = filterTrialsForReprocessing(filterTrialsByDate(userTrials), processedTrials);
  		
 		LOGGER.info(trialsToProcess.size() + " trials will be processed");
 		
-		for(UserTrial userTrial : trialsToProcess) {
-			LOGGER.info(userTrial.toString());
-		}
+//		for(UserTrial userTrial : trialsToProcess) {
+//			LOGGER.info(userTrial.toString());
+//		}
 		
-		// Create and persist the intermediate data format.
+		// If necessary, find the normalized data for any previously processed trial in the list 
+		if(alsoReprocessTrials || alsoReprocessAllTrials) {
+			
+			for(UserTrial userTrial : trialsToProcess) {
+				try { 
+					userTrial.setNormalizedData(
+						jdbcTemplate.queryForObject(
+							SQL_SELECT_TRIALIST_STREAM_DATA_POINTS, 
+							new Object[] { userTrial.getUserId() }, 
+							new RowMapper<JSONObject>() {
+								@Override
+								public JSONObject mapRow(ResultSet rs, int rowNum) throws SQLException {
+									try {
+										return new JSONObject(rs.getString("data"));
+									} catch (JSONException jsonException) {
+										LOGGER.error("Found stream data that cannot be parsed as JSON. The value returned from " +
+											"observer_stream_data is " + rs.getString("data"));
+										throw new SQLException(jsonException);
+									}
+								}
+							}
+						)
+					);
+				} catch (DataAccessException dataAccessException) {
+					LOGGER.error("An error occurred when accessing the database.");
+					throw dataAccessException;
+				}
+			}
+		} 
+		
+		// Create the normalized data stream for each trial 
+		for(UserTrial userTrial : trialsToProcess) {
+			if(userTrial.getNormalizedData() == null) { // If this trial has not already been processed, create the intermediate 
+				                                        // representation of the data and store it
+				List<PromptResponse> responses = null;
+				
+				try { 
+					
+					LOGGER.info("Params to retrieving main surveys. " +
+						"Start date " + yearMonthDayFormatter.print(userTrial.getTrialStartDate()) +
+						", end date " + yearMonthDayFormatter.print(userTrial.getTrialEndDate()) + 
+						",  user ID " + userTrial.getUserId());
+					
+					responses = jdbcTemplate.query(
+						SQL_SELECT_MAIN_SURVEY_PROMPT_RESPONSES_FOR_USER, 
+						new Object[] { yearMonthDayFormatter.print(userTrial.getTrialStartDate()), 
+									   yearMonthDayFormatter.print(userTrial.getTrialEndDate()), 
+									   userTrial.getUserId()  }, 
+						new RowMapper<PromptResponse>() {
+							@Override
+							public PromptResponse mapRow(ResultSet rs, int rowNum) throws SQLException {
+								return new PromptResponse(rs.getString("prompt_id"), rs.getString("response"), rs.getLong("epoch_millis"));
+							}
+						}
+					);
+				} catch (DataAccessException dataAccessException) {
+					LOGGER.error("An error occurred when accessing the database.");
+					throw dataAccessException;
+				}
+				
+				LOGGER.info("Found " + responses.size() + " prompt responses for the main survey for user " + userTrial.getUserId());
+				
+				// Now convert the list of responses into the normalized format
+
+				JSONObject root = new JSONObject();
+				JSONObject metadata = new JSONObject();
+				JSONArray data = new JSONArray();
+				JSONArray regimenAs = null;
+				JSONArray regimenBs = null;
+				
+				int regimenDuration = -1;
+				int numberOfCycles = -1;
+				String[] random = null;
+				
+				// Metadata Section
+				
+				try {
+					regimenAs = regimenArray(userTrial.getSetupSurvey(), "regimenA", campaignUrn);
+				}  catch (JSONException jsonException) {
+					LOGGER.error("Could not create the string array of Regimen A values for survey key " 
+						+ userTrial.getSetupSurveyPrimaryKey(), jsonException);
+					continue;
+				}
+
+				try {
+					regimenBs = regimenArray(userTrial.getSetupSurvey(), "regimenB", campaignUrn);
+				}  catch (JSONException jsonException) {
+					LOGGER.error("Could not create the string array of Regimen B values "
+						+ userTrial.getSetupSurveyPrimaryKey(), jsonException);
+					continue;
+				}
+				
+				
+				try {
+					metadata.put("regimen_a", regimenAs);
+					metadata.put("regimen_b", regimenBs);
+					metadata.put("trial_start_date", yearMonthDayFormatter.print(userTrial.getTrialStartDate()));
+					metadata.put("trial_end_date", yearMonthDayFormatter.print(userTrial.getTrialEndDate()));
+					
+					regimenDuration = regimenDurationInDays(getIntValueForPromptId(userTrial.getSetupSurvey(), "regimenDuration"));
+					metadata.put("regimen_duration", regimenDuration);
+					
+					numberOfCycles = numberOfCycles(getIntValueForPromptId(userTrial.getSetupSurvey(), "numberComparisonCycles"));
+					metadata.put("number_of_cycles", numberOfCycles);
+					
+					String randomABPairs = getStringValueForPromptId(userTrial.getSetupSurvey(), "randomAsText");
+					metadata.put("cycle_ab_pairs", randomABPairs);
+					
+					random = randomABPairs.replace(",", "").split("");
+
+					root.put("metdata", metadata);
+					
+					// LOGGER.info(root.toString(4));
+					
+				} catch (JSONException jsonException) {
+					
+					LOGGER.error("Could not create metadata object for the analysis data set. The survey key is " + userTrial.getSetupSurveyPrimaryKey(), jsonException);
+					continue;
+				}
+				
+				
+				for(PromptResponse promptResponse : responses) {
+					
+					// Data section	
+					
+				}
+				
+				userTrial.setNormalizedData(root);
+				
+				// TODO Instead of setting this boolean the data should just be persisted 
+				userTrial.setPersistNormalizedData(true);
+			}
+		}
 		
 		// Pass to DPU.
 		
@@ -416,12 +594,12 @@ public class TrialistAnalysisProcessor {
 			// Don't process trials that are not finished yet
 			if(userTrial.getTrialEndDate().compareTo(yesterday) <= 0) {
 				 
-				if(reprocessAllTrials) {
+				if(alsoReprocessAllTrials) {
 					// Any finished trial will be processed
 					trialsToProcess.add(userTrial);
 					
 				} else {
-					// Otherwise only trials ending on end date parameter to this program will be processed
+					// Otherwise only trials ending on the end date parameter to this program will be processed
 					if(userTrial.getTrialEndDate().equals(dateTrialEnded)) {
 						trialsToProcess.add(userTrial);
 					}
@@ -436,7 +614,7 @@ public class TrialistAnalysisProcessor {
 	 * If reprocessTrials is false, this method filters out any trial that has already been processed. 
 	 */
 	private List<UserTrial> filterTrialsForReprocessing(List<UserTrial> trialsToCheck, List<ProcessedTrial> processedTrials) { 
-		if(! reprocessTrials) {
+		if(! alsoReprocessTrials) {
 			// Use an iterator because the list might be modified as it is traversed
 			Iterator<UserTrial> iterator = trialsToCheck.iterator();
 			while(iterator.hasNext()) {
@@ -449,6 +627,57 @@ public class TrialistAnalysisProcessor {
 			
 		} else {
 			return trialsToCheck;
+		}
+	}
+	
+	/**
+	 * Converts the multi_choice prompt response String into a JSON array of regimens. If the campaignUrn 
+	 */
+	private JSONArray regimenArray(JSONObject setupSurvey, String regimenKey, String campaignUrn) throws JSONException {
+		boolean isMock = campaignUrn.contains("old") || campaignUrn.contains("mock"); 
+		JSONArray stringArray = new JSONArray();
+		JSONArray intArray = null;
+		try  {
+			intArray = new JSONArray(getStringValueForPromptId(setupSurvey, regimenKey));
+		} catch (JSONException jsonException) {
+			LOGGER.info("Could not retrieve the regimen array from the setup survey using the key " + regimenKey);
+		}
+		int size = intArray.length();
+		for(int i = 0; i < size; i++) {
+			stringArray.put(regimenStringForKey(intArray.getInt(i), isMock));
+		}
+		return stringArray;
+	}
+	
+	/**
+	 * Returns the String value for a given regimen key. 
+	 */
+	private String regimenStringForKey(int key, boolean isMock) throws JSONException {
+		if(key == 0) {
+			return isMock ? "Classical" : ""; 
+		} else if(key == 1) {
+			return isMock ? "Country" : "";
+		} else if(key == 2) {
+			return isMock ? "Easy Listening" : "";
+		} else if(key == 3) {
+			return isMock ? "Folk" : "";
+		} else if(key == 4) {
+			return isMock ? "Hip hop" : "";
+		} else if(key == 5) {
+			return isMock ? "Jazz" : "";
+		} else if(key == 6) {
+			return isMock ? "Pop" : "";
+		} else if(key == 7) {
+			return isMock ? "Rock" : "";
+		} else if(key == 8) {
+			if(isMock) {
+				return "Other";
+			}
+			else {
+				throw new JSONException("Found an unknown regimen key for a mock trial. The key value is " + key);
+			}
+		} else {
+			throw new JSONException("Found an unknown regimen key for a mock or real trial. The key value is " + key);
 		}
 	}
 	
@@ -511,8 +740,8 @@ public class TrialistAnalysisProcessor {
 				}
 				
 				JSONObject parameters = null;
-				boolean reprocess = false;
-				boolean reprocessAll = false;
+				boolean alsoReprocess = false;
+				boolean alsoReprocessAll = false;
 				String trialEndDateString = null;
 				DateTime trialEndDate = null;
 				String campaignUrn = null;
@@ -525,16 +754,16 @@ public class TrialistAnalysisProcessor {
 				}
 				
 				try {
-					reprocess = parameters.getBoolean("reprocess");
+					alsoReprocess = parameters.getBoolean("also-reprocess");
 				} catch (JSONException jsonException) {
-					LOGGER.error("Boolean value missing for the key 'reprocess'.");
+					LOGGER.error("Boolean value missing for the key 'also-reprocess'.");
 					return;
 				}
 				
 				try {
-					reprocessAll = parameters.getBoolean("reprocess-all");
+					alsoReprocessAll = parameters.getBoolean("also-reprocess-all");
 				} catch (JSONException jsonException) {
-					LOGGER.error("Boolean value missing for the key 'reprocess-all'.");
+					LOGGER.error("Boolean value missing for the key 'also-reprocess-all'.");
 					return;
 				}
 
@@ -558,7 +787,7 @@ public class TrialistAnalysisProcessor {
 					return;
 				}
 				
-				processor = new TrialistAnalysisProcessor(reprocess, reprocessAll, trialEndDate, campaignUrn);
+				processor = new TrialistAnalysisProcessor(alsoReprocess, alsoReprocessAll, trialEndDate, campaignUrn);
 								
 			} else {
 				
@@ -641,13 +870,25 @@ public class TrialistAnalysisProcessor {
 		private DateTime trialEndDate;
 		private JSONObject setupSurvey;
 		private long setupSurveyPrimaryKey;
+		private JSONObject normalizedData;
+		private boolean persistNormalizedData;
 		
-		public UserTrial(final long pUserId, final DateTime pTrialStartDate, final DateTime pTrialEndDate, JSONObject pSetupSurvey, final long pSetupSurveyPrimaryKey) {
+		DateTimeFormatter yearMonthDayFormatter;
+		
+		public UserTrial(final long pUserId, final DateTime pTrialStartDate, final DateTime pTrialEndDate, 
+				JSONObject pSetupSurvey, final long pSetupSurveyPrimaryKey) {
 			userId = pUserId;
 			trialStartDate = pTrialStartDate;
 			trialEndDate = pTrialEndDate;
 			setupSurvey = pSetupSurvey;
 			setupSurveyPrimaryKey = pSetupSurveyPrimaryKey;
+			normalizedData = null;
+			persistNormalizedData = false;
+			
+			DateTimeFormatterBuilder builder = new DateTimeFormatterBuilder();
+			builder.append(ISODateTimeFormat.yearMonthDay().getPrinter(), ISODateTimeFormat.yearMonthDay().getParser());
+			yearMonthDayFormatter = builder.toFormatter().withZoneUTC();
+
 		}
 
 		public long getUserId() {
@@ -670,11 +911,27 @@ public class TrialistAnalysisProcessor {
 			return setupSurveyPrimaryKey;
 		}
 		
+		public JSONObject getNormalizedData() {
+			return normalizedData;
+		}
+
+		public void setNormalizedData(JSONObject normalizedData) {
+			this.normalizedData = normalizedData;
+		}
+		
+		public boolean persistNormalizedData() {
+			return persistNormalizedData;
+		}
+
+		public void setPersistNormalizedData(boolean persistNormalizedData) {
+			this.persistNormalizedData = persistNormalizedData;
+		}
+
 		// Omitted setupSurveyPrimary key for less verbose debugging
 		@Override
 		public String toString() {
 			return "UserTrial [userId=" + userId + ", trialStartDate="
-					+ trialStartDate + ", trialEndDate=" + trialEndDate
+					+ yearMonthDayFormatter.print(trialStartDate) + ", trialEndDate=" + yearMonthDayFormatter.print(trialEndDate)
 					/*+ ", setupSurvey=" + setupSurvey*/ + "]";
 		}	
 	}
@@ -724,5 +981,28 @@ public class TrialistAnalysisProcessor {
 				return false;
 			return true;
 		}
+	}
+	
+	private static class PromptResponse {
+		private String promptId;
+		private String response;
+		private long epochMillis;
+		
+		public PromptResponse(String pPromptId, String pResponse, long epochMillis) {
+			promptId = pPromptId;
+			response = pResponse;
+		}
+
+		public String getPromptId() {
+			return promptId;
+		}
+
+		public String getResponse() {
+			return response;
+		}
+
+		public long getEpochMillis() {
+			return epochMillis;
+		}	
 	}
 }
