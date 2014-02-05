@@ -14,6 +14,7 @@ import org.apache.log4j.Logger;
 import org.apache.log4j.PropertyConfigurator;
 import org.joda.time.DateTime;
 import org.joda.time.DateTimeZone;
+import org.joda.time.Days;
 import org.joda.time.format.DateTimeFormatter;
 import org.joda.time.format.DateTimeFormatterBuilder;
 import org.joda.time.format.ISODateTimeFormat;
@@ -22,6 +23,7 @@ import org.json.JSONException;
 import org.json.JSONObject;
 import org.springframework.dao.DataAccessException;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.core.RowCallbackHandler;
 import org.springframework.jdbc.core.RowMapper;
 
 
@@ -101,7 +103,7 @@ public class TrialistAnalysisProcessor {
 	
 	// Get all of the Trialist main surveys for a given user. "main" is the name given to the daily self-report survey in Trialist
 	private static final String SQL_SELECT_MAIN_SURVEY_PROMPT_RESPONSES_FOR_USER =
-		"SELECT pr.prompt_id, pr.response, sr.epoch_millis " +
+		"SELECT sr.id, sr.epoch_millis, sr.phone_timezone, pr.prompt_id, pr.response " +
 		"FROM prompt_response pr, survey_response sr " +
 		"WHERE pr.survey_response_id = sr.id " +
 			"AND sr.survey_id = 'main' " +
@@ -216,11 +218,16 @@ public class TrialistAnalysisProcessor {
 		// Find all processed trials to handling filtering in case case trial reprocessing is not desired
 		List<ProcessedTrial> processedTrials = null;
 		
-		// Date formatter to strip off times and timezones from dates
+		// Date formatter to strip off times and timezones from trial start and end dates
 		DateTimeFormatterBuilder builder = new DateTimeFormatterBuilder();
 		builder.append(ISODateTimeFormat.yearMonthDay().getPrinter(), ISODateTimeFormat.yearMonthDay().getParser());
 		DateTimeFormatter yearMonthDayFormatter = builder.toFormatter().withZoneUTC();
-
+		
+		// Date formatter to print datetimes returned from the db
+		builder.clear();
+		builder.append(ISODateTimeFormat.dateTime().getPrinter(), ISODateTimeFormat.dateTime().getParser());
+		DateTimeFormatter dateTimeFormatter = builder.toFormatter(); // the timezone is dependent on the user's data
+		
 		try {
 			processedTrials = jdbcTemplate.query(
 				SQL_SELECT_PROCESSED_TRIALS, 
@@ -368,7 +375,7 @@ public class TrialistAnalysisProcessor {
 		// Filter out all trials that should not be processed
 		List<UserTrial> trialsToProcess = filterTrialsForReprocessing(filterTrialsByDate(userTrials), processedTrials);
  		
-		LOGGER.info(trialsToProcess.size() + " trials will be processed");
+		LOGGER.info(trialsToProcess.size() + " trial(s) will be processed");
 		
 //		for(UserTrial userTrial : trialsToProcess) {
 //			LOGGER.info(userTrial.toString());
@@ -404,12 +411,13 @@ public class TrialistAnalysisProcessor {
 			}
 		} 
 		
+		
+		SurveyReponseRowCallbackHandler surveyResponseHandler = new SurveyReponseRowCallbackHandler();
+		
 		// Create the normalized data stream for each trial 
 		for(UserTrial userTrial : trialsToProcess) {
 			if(userTrial.getNormalizedData() == null) { // If this trial has not already been processed, create the intermediate 
 				                                        // representation of the data and store it
-				List<PromptResponse> responses = null;
-				
 				try { 
 					
 					LOGGER.info("Params to retrieving main surveys. " +
@@ -417,59 +425,34 @@ public class TrialistAnalysisProcessor {
 						", end date " + yearMonthDayFormatter.print(userTrial.getTrialEndDate()) + 
 						",  user ID " + userTrial.getUserId());
 					
-					responses = jdbcTemplate.query(
+					jdbcTemplate.query(
 						SQL_SELECT_MAIN_SURVEY_PROMPT_RESPONSES_FOR_USER, 
 						new Object[] { yearMonthDayFormatter.print(userTrial.getTrialStartDate()), 
 									   yearMonthDayFormatter.print(userTrial.getTrialEndDate()), 
-									   userTrial.getUserId()  }, 
-						new RowMapper<PromptResponse>() {
-							@Override
-							public PromptResponse mapRow(ResultSet rs, int rowNum) throws SQLException {
-								return new PromptResponse(rs.getString("prompt_id"), rs.getString("response"), rs.getLong("epoch_millis"));
-							}
-						}
+									   userTrial.getUserId()  },
+						surveyResponseHandler
 					);
 				} catch (DataAccessException dataAccessException) {
 					LOGGER.error("An error occurred when accessing the database.");
 					throw dataAccessException;
 				}
 				
-				LOGGER.info("Found " + responses.size() + " prompt responses for the main survey for user " + userTrial.getUserId());
+				LOGGER.info("Found " + surveyResponseHandler.getSurveyResponses().size() + " survey responses for the main survey for user " + userTrial.getUserId());
 				
 				// Now convert the list of responses into the normalized format
 
 				JSONObject root = new JSONObject();
 				JSONObject metadata = new JSONObject();
-				JSONArray data = new JSONArray();
-				JSONArray regimenAs = null;
-				JSONArray regimenBs = null;
+				JSONArray dataArray = new JSONArray();
 				
 				int regimenDuration = -1;
 				int numberOfCycles = -1;
-				String[] random = null;
 				
 				// Metadata Section
 				
 				try {
-					regimenAs = regimenArray(userTrial.getSetupSurvey(), "regimenA", campaignUrn);
-				}  catch (JSONException jsonException) {
-					LOGGER.error("Could not create the string array of Regimen A values for survey key " 
-						+ userTrial.getSetupSurveyPrimaryKey(), jsonException);
-					continue;
-				}
-
-				try {
-					regimenBs = regimenArray(userTrial.getSetupSurvey(), "regimenB", campaignUrn);
-				}  catch (JSONException jsonException) {
-					LOGGER.error("Could not create the string array of Regimen B values "
-						+ userTrial.getSetupSurveyPrimaryKey(), jsonException);
-					continue;
-				}
-				
-				
-				try {
-					metadata.put("regimen_a", regimenAs);
-					metadata.put("regimen_b", regimenBs);
+					metadata.put("regimen_a", regimenArray(userTrial.getSetupSurvey(), "regimenA", campaignUrn));
+					metadata.put("regimen_b", regimenArray(userTrial.getSetupSurvey(), "regimenB", campaignUrn));
 					metadata.put("trial_start_date", yearMonthDayFormatter.print(userTrial.getTrialStartDate()));
 					metadata.put("trial_end_date", yearMonthDayFormatter.print(userTrial.getTrialEndDate()));
 					
@@ -482,7 +465,7 @@ public class TrialistAnalysisProcessor {
 					String randomABPairs = getStringValueForPromptId(userTrial.getSetupSurvey(), "randomAsText");
 					metadata.put("cycle_ab_pairs", randomABPairs);
 					
-					random = randomABPairs.replace(",", "").split("");
+					// random = randomABPairs.replace(",", "").split("");
 
 					root.put("metdata", metadata);
 					
@@ -490,29 +473,74 @@ public class TrialistAnalysisProcessor {
 					
 				} catch (JSONException jsonException) {
 					
-					LOGGER.error("Could not create metadata object for the analysis data set. The survey key is " + userTrial.getSetupSurveyPrimaryKey(), jsonException);
+					LOGGER.error("Could not create metadata object for the analysis data set because of invalid JSON " +
+						"or a missing key in the setup survey. The survey key is " 
+							+ userTrial.getSetupSurveyPrimaryKey(), jsonException);
 					continue;
 				}
+
+				// Data Section
 				
+				List<SurveyResponse> surveyResponses = surveyResponseHandler.getSurveyResponses();
 				
-				for(PromptResponse promptResponse : responses) {
+				try {
 					
-					// Data section	
+					int cycleLength = regimenDuration * 2;
+					DateTime surveyDateTime = null;
 					
-				}
-				
+					for(SurveyResponse surveyResponse : surveyResponses) {
+						// Calculate the current cycle which is based on the number of days the participant has been participating
+						// divided by the cycleLength
+						
+						surveyDateTime = new DateTime(
+							surveyResponse.getEpochMillis()).withZone(DateTimeZone.forID("UTC")).withTime(0, 0, 0, 0);
+						
+						int daysInTrial = Days.daysBetween(userTrial.getTrialStartDate(), surveyDateTime).getDays();
+                        int cycle = (daysInTrial / cycleLength) + 1;
+						
+						List<PromptResponse> promptResponses = surveyResponse.getPromptResponses();
+						JSONObject dataPoint = new JSONObject();
+						
+						for(PromptResponse promptResponse : promptResponses) {
+							
+							dataPoint.put("cycle", cycle);
+							dataPoint.put("timestamp", 
+									dateTimeFormatter.withZone(DateTimeZone.forID(surveyResponse.getTimeZoneString()))
+										.print(surveyResponse.getEpochMillis()));
+							
+							
+							if(promptResponse.getPromptId().equals("currentRegimen")) {
+								
+								dataPoint.put("regimen", regimen(Integer.parseInt(promptResponse.getResponse())));
+								
+							} else {
+								if(! promptResponse.getPromptId().equals("notesAboutToday")) {
+									dataPoint.put(promptResponse.getPromptId(), Integer.parseInt(promptResponse.getResponse()));
+								}
+							}
+						}
+						
+						dataArray.put(dataPoint);
+					}
+					
+					root.put("data", dataArray);
+					
+					LOGGER.info(root.toString(4));
+					
+				} catch (JSONException | IllegalArgumentException dataArrayCreationException) {
+					
+					LOGGER.error("Could not create an entry in the data array from a survey response.", dataArrayCreationException);
+					continue;
+				} 
+ 				
 				userTrial.setNormalizedData(root);
 				
-				// TODO Instead of setting this boolean the data should just be persisted 
-				userTrial.setPersistNormalizedData(true);
+				// Save the data
+				
 			}
 		}
 		
-		// Pass to DPU.
-		
-		// Persist DPU results.
-		
-		// Mark trial as processed.
+		// For each trial, pass to DPU and persist the DPU results.
 		
 	}
 	
@@ -545,6 +573,20 @@ public class TrialistAnalysisProcessor {
 			return 4;
 		} else {
 			throw new IllegalArgumentException("Unknown key for number of cycles: " + key);
+		}
+	}
+	
+	/**
+	 * Map the number of cycles prompt response  (the <key> element in the prompt's XML config) to the actual number of cycles.
+	 * Magic numbers ahoy!
+	 */
+	private String regimen(int key) {
+		if(key == 0) {
+			return "A";
+		} else if(key == 1) {
+			return "B";
+		} else {
+			throw new IllegalArgumentException("Unknown key for regimen: " + key);
 		}
 	}
 	
@@ -654,21 +696,22 @@ public class TrialistAnalysisProcessor {
 	 */
 	private String regimenStringForKey(int key, boolean isMock) throws JSONException {
 		if(key == 0) {
-			return isMock ? "Classical" : ""; 
+			return isMock ? "Classical" : "No specific treatment"; 
 		} else if(key == 1) {
-			return isMock ? "Country" : "";
+			return isMock ? "Country" : "Tylenol (acetaminophen)";
 		} else if(key == 2) {
-			return isMock ? "Easy Listening" : "";
+			return isMock ? "Easy Listening" : "Any NSAID (e.g., ibuprofen, naproxen, sulindac)";
 		} else if(key == 3) {
-			return isMock ? "Folk" : "";
+			return isMock ? "Folk" : "Codeine combination product (e.g., Tylenol with codeine, Tylenol #3)";
 		} else if(key == 4) {
-			return isMock ? "Hip hop" : "";
+			return isMock ? "Hip hop" : "Tramadol (e.g., Ultram, Ryzolt, ConZip, Rybix)";
 		} else if(key == 5) {
-			return isMock ? "Jazz" : "";
+			return isMock ? "Jazz" : "Hydrocodone combination product (e.g., Vicodin, Norco)";
 		} else if(key == 6) {
-			return isMock ? "Pop" : "";
+			return isMock ? "Pop" : "Oxycodone combination treatment (e.g., Percocet)";
 		} else if(key == 7) {
-			return isMock ? "Rock" : "";
+			return isMock ? "Rock" : "Complementary treatment: including but not limited to physical activity (exercise," +
+					" stretching, yoga), mindfulness (meditation, relaxation, music therapy)";
 		} else if(key == 8) {
 			if(isMock) {
 				return "Other";
@@ -871,7 +914,6 @@ public class TrialistAnalysisProcessor {
 		private JSONObject setupSurvey;
 		private long setupSurveyPrimaryKey;
 		private JSONObject normalizedData;
-		private boolean persistNormalizedData;
 		
 		DateTimeFormatter yearMonthDayFormatter;
 		
@@ -883,7 +925,6 @@ public class TrialistAnalysisProcessor {
 			setupSurvey = pSetupSurvey;
 			setupSurveyPrimaryKey = pSetupSurveyPrimaryKey;
 			normalizedData = null;
-			persistNormalizedData = false;
 			
 			DateTimeFormatterBuilder builder = new DateTimeFormatterBuilder();
 			builder.append(ISODateTimeFormat.yearMonthDay().getPrinter(), ISODateTimeFormat.yearMonthDay().getParser());
@@ -919,14 +960,6 @@ public class TrialistAnalysisProcessor {
 			this.normalizedData = normalizedData;
 		}
 		
-		public boolean persistNormalizedData() {
-			return persistNormalizedData;
-		}
-
-		public void setPersistNormalizedData(boolean persistNormalizedData) {
-			this.persistNormalizedData = persistNormalizedData;
-		}
-
 		// Omitted setupSurveyPrimary key for less verbose debugging
 		@Override
 		public String toString() {
@@ -983,12 +1016,51 @@ public class TrialistAnalysisProcessor {
 		}
 	}
 	
+	/**
+	 * Domain object for a single survey response (that contains many prompt responses). 
+	 */
+	private static class SurveyResponse {
+		private long epochMillis;
+		private String timeZoneString;
+		private List<PromptResponse> promptResponses;
+		
+		public SurveyResponse(long pEpochMillis, String pTimeZoneString) {
+			epochMillis = pEpochMillis;
+			timeZoneString = pTimeZoneString;
+			promptResponses = new ArrayList<PromptResponse>();
+		}
+		
+		public SurveyResponse(SurveyResponse other) {
+			epochMillis = other.getEpochMillis();
+			timeZoneString = other.getTimeZoneString();
+			promptResponses = new ArrayList<PromptResponse>(other.getPromptResponses());
+		}
+		
+		public void addPromptResponse(PromptResponse response) {
+			promptResponses.add(response);
+		}
+		
+		public List<PromptResponse> getPromptResponses() {
+			return promptResponses;
+		}
+
+		public long getEpochMillis() {
+			return epochMillis;
+		}
+
+		public String getTimeZoneString() {
+			return timeZoneString;
+		}
+	}
+	
+	/**
+	 * Domain object for a single prompt response. 
+	 */
 	private static class PromptResponse {
 		private String promptId;
 		private String response;
-		private long epochMillis;
 		
-		public PromptResponse(String pPromptId, String pResponse, long epochMillis) {
+		public PromptResponse(String pPromptId, String pResponse) {
 			promptId = pPromptId;
 			response = pResponse;
 		}
@@ -1000,9 +1072,59 @@ public class TrialistAnalysisProcessor {
 		public String getResponse() {
 			return response;
 		}
+	}
+	
+	/**
+	 * Callback handler to manage conversion of database rows into SurveyResponse and PromptResponse objects. 
+	 */
+	private static class SurveyReponseRowCallbackHandler implements RowCallbackHandler {
+		private long currentSurveyKey;
+		private SurveyResponse currentSurveyResponse = null;
+		
+		private List<SurveyResponse> surveyResponses;
+		
+		public SurveyReponseRowCallbackHandler() {
+			currentSurveyKey = -1;
+			surveyResponses = new ArrayList<SurveyResponse>();
+		}
+		
+		public List<SurveyResponse> getSurveyResponses() {
+			return surveyResponses;
+		}
+		
+		public void processRow(ResultSet rs) throws SQLException { LOGGER.info("processRow()");
+			long surveyKey = rs.getLong("id");
+			String promptId = rs.getString("prompt_id");
+			String response = rs.getString("response");
+			long epochMillis = rs.getLong("epoch_millis");
+			String timezone = rs.getString("phone_timezone");
+						
+			if(currentSurveyKey == -1) { LOGGER.info("first time thru");
+				
+				currentSurveyKey = surveyKey;
+				currentSurveyResponse = new SurveyResponse(epochMillis, timezone);
+				currentSurveyResponse.addPromptResponse(new PromptResponse(promptId, response));
+				
+			} else if(currentSurveyKey != surveyKey) { LOGGER.info("next survey");
+				
+				// Save a deep copy of the previous survey to the list
+				surveyResponses.add(new SurveyResponse(currentSurveyResponse));
+				
+				currentSurveyKey = surveyKey;
+				currentSurveyResponse = new SurveyResponse(epochMillis, timezone);
+				currentSurveyResponse.addPromptResponse(new PromptResponse(promptId, response));
+				
+			} else if(rs.isLast()) {
+				
+				currentSurveyResponse.addPromptResponse(new PromptResponse(promptId, response));
 
-		public long getEpochMillis() {
-			return epochMillis;
-		}	
+				// Save a deep copy of the previous survey to the list
+				surveyResponses.add(new SurveyResponse(currentSurveyResponse));
+				
+			} else {
+				
+				currentSurveyResponse.addPromptResponse(new PromptResponse(promptId, response));
+			}
+		}
 	}
 }
