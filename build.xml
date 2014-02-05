@@ -43,7 +43,7 @@
   
   <target name="javac" description="Compiles Java files.">
     <mkdir dir="${build}/classes"/>
-    <javac destdir="${build}/classes" source="1.6" target="1.6"
+    <javac destdir="${build}/classes" source="1.7" target="1.7"
            debug="true" deprecation="true" optimize="false" failonerror="true" encoding="UTF-8">
       <compilerarg value="-Xlint:unchecked"/>
       <src path="${src}"/>
