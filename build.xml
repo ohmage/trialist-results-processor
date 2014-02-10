@@ -23,6 +23,11 @@
     <include name="**/commons-pool-1.6.jar"/>
     <include name="**/joda-time-2.3.jar"/>
     <include name="**/json.org-2011-11-14.jar" />
+    <include name="**/fluent-hc-4.3.1.jar" />
+    <include name="**/httpclient-4.3.1.jar" />
+    <include name="**/httpclient-cache-4.3.1.jar" />
+    <include name="**/httpcore-4.3.jar" />
+    <include name="**/httpmime-4.3.1.jar" />
     <include name="**/log4j-1.2.16.jar" />
     <include name="**/mysql-connector-java-5.1.25-bin.jar" />
     <include name="**/org.springframework.asm-3.1.1.RELEASE.jar" />
