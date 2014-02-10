@@ -1,5 +1,8 @@
 package org.ohmage.trialist.processor;
 
+import java.io.IOException;
+import java.io.InputStream;
+import java.nio.charset.Charset;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.ArrayList;
@@ -10,6 +13,11 @@ import java.util.List;
 import java.util.Properties;
 
 import org.apache.commons.dbcp.BasicDataSource;
+import org.apache.http.client.methods.CloseableHttpResponse;
+import org.apache.http.client.methods.HttpPost;
+import org.apache.http.entity.StringEntity;
+import org.apache.http.impl.client.CloseableHttpClient;
+import org.apache.http.impl.client.HttpClients;
 import org.apache.log4j.Logger;
 import org.apache.log4j.PropertyConfigurator;
 import org.joda.time.DateTime;
@@ -56,6 +64,9 @@ public class TrialistAnalysisProcessor {
 	private static final String DATA_STREAM_VERSION = "2013013000";
 	private static final String ANALYSIS_RESULTS_STREAM_VERSION = "2013013000";
 	
+	// OpenCPU HTTP connectivity
+	private static final String OCPU_URL = "https://pilots.ohmage.org/ocpu/github/jservadio/TrialistNof1/R/wrap/json";
+	
 	// Processing customization
 	private boolean alsoReprocessTrials;
 	private boolean alsoReprocessAllTrials;
@@ -95,10 +106,10 @@ public class TrialistAnalysisProcessor {
 			"LEFT JOIN observer_stream_link ON observer_stream_link_id = observer_stream_link.id " +
 			"LEFT JOIN observer ON observer_stream_link.observer_id = observer.id " +
 			"LEFT JOIN observer_stream ON observer_stream_link.observer_stream_id = observer_stream.id " +
-			"WHERE observer.observer_id = " + OBSERVER_ID + 
-			" AND observer.version = " + OBSERVER_VERSION +
-			" AND observer_stream.stream_id = " + DATA_STREAM_ID + 
-			" AND observer_stream.version = " + DATA_STREAM_VERSION + 
+			"WHERE observer.observer_id = '" + OBSERVER_ID + "'" + 
+			" AND observer.version = '" + OBSERVER_VERSION + "'" +
+			" AND observer_stream.stream_id = '" + DATA_STREAM_ID + "'" +  
+			" AND observer_stream.version = '" + DATA_STREAM_VERSION + "'" + 
 			" AND observer_stream_data.user_id = ?";
 	
 	// Get all of the Trialist main surveys for a given user. "main" is the name given to the daily self-report survey in Trialist
@@ -109,8 +120,28 @@ public class TrialistAnalysisProcessor {
 			"AND sr.survey_id = 'main' " +
 			"AND sr.campaign_id = (SELECT id FROM campaign where urn = '" + CAMPAIGN_URN + "') " +
 			"AND DATE(FROM_UNIXTIME(sr.epoch_millis / 1000)) BETWEEN ? AND ? " +
-			"AND sr.user_id = ?";
-			
+			"AND sr.user_id = ? " +
+			"ORDER BY user_id, epoch_millis";
+	
+	private static final String SQL_INSERT_TRIAL_DATA_POINTS = 
+		"INSERT INTO observer_stream_data " +
+		"(user_id, observer_stream_link_id, data) VALUES " +
+			"(?, " +
+			"(SELECT osl.id FROM observer_stream_link osl, observer_stream os, observer o WHERE o.observer_id = '" + OBSERVER_ID +
+				"' AND o.version = '" + OBSERVER_VERSION + "' AND os.stream_id = '" + DATA_STREAM_ID +
+				"' AND os.version = '" + DATA_STREAM_VERSION + "' AND osl.observer_id = o.id AND osl.observer_stream_id = os.id), " +
+			"?)";
+
+	private static final String SQL_INSERT_TRIAL_ANALYSIS_RESULTS = 
+			"INSERT INTO observer_stream_data " +
+			"(user_id, observer_stream_link_id, data) VALUES " +
+				"(?, " +
+				"(SELECT osl.id FROM observer_stream_link osl, observer_stream os, observer o WHERE o.observer_id = '" + OBSERVER_ID +
+					"' AND o.version = '" + OBSERVER_VERSION + "' AND os.stream_id = '" + ANALYSIS_RESULTS_STREAM_ID + 
+					"' AND os.version = '" + ANALYSIS_RESULTS_STREAM_VERSION + "' AND osl.observer_id = o.id " +
+					"AND osl.observer_stream_id = os.id), " +
+				"?)";
+	
 	/**
 	 * Create a processor that will process the previous day's completed trials for the default Trialist campaign.
 	 */
@@ -166,7 +197,7 @@ public class TrialistAnalysisProcessor {
 	/**
 	 * 
 	 */
-	public void run() {
+	public void run() throws IOException {
 		
 		// 1. Find all finished trials. Finished trials are those where (period-days * 2 * the number of cycles) days > ( max
 		// survey_response.epoch_millis - min survey_response.epoch_mills) days. 
@@ -456,6 +487,8 @@ public class TrialistAnalysisProcessor {
 					metadata.put("trial_start_date", yearMonthDayFormatter.print(userTrial.getTrialStartDate()));
 					metadata.put("trial_end_date", yearMonthDayFormatter.print(userTrial.getTrialEndDate()));
 					
+//					metadata.put("trial_start_timestamp", dateTimeFormatter.print(userTrial.getTrialEndDate()));
+					
 					regimenDuration = regimenDurationInDays(getIntValueForPromptId(userTrial.getSetupSurvey(), "regimenDuration"));
 					metadata.put("regimen_duration", regimenDuration);
 					
@@ -467,7 +500,7 @@ public class TrialistAnalysisProcessor {
 					
 					// random = randomABPairs.replace(",", "").split("");
 
-					root.put("metdata", metadata);
+					root.put("metadata", metadata);
 					
 					// LOGGER.info(root.toString(4));
 					
@@ -514,9 +547,16 @@ public class TrialistAnalysisProcessor {
 								dataPoint.put("regimen", regimen(Integer.parseInt(promptResponse.getResponse())));
 								
 							} else {
-								if(! promptResponse.getPromptId().equals("notesAboutToday")) {
-									dataPoint.put(promptResponse.getPromptId(), Integer.parseInt(promptResponse.getResponse()));
-								}
+								if(! promptResponse.getPromptId().equals("notesAboutToday")) { // notesAboutToday is not relevant to
+									                                                           // the analysis, so skip it
+									
+									if(! promptResponse.getPromptId().startsWith("cognitive")) {
+										dataPoint.put(promptResponse.getPromptId(), Integer.parseInt(promptResponse.getResponse()));
+									} else {
+										// Test until Joe updates
+										dataPoint.put("cognitiveFunctionSlowThinkingPrompt", Integer.parseInt(promptResponse.getResponse()));
+									}
+								} 
 							}
 						}
 						
@@ -524,24 +564,86 @@ public class TrialistAnalysisProcessor {
 					}
 					
 					root.put("data", dataArray);
-					
-					LOGGER.info(root.toString(4));
+					LOGGER.info("Normalized trial data: " + root.toString());
+					userTrial.setNormalizedData(root);
 					
 				} catch (JSONException | IllegalArgumentException dataArrayCreationException) {
 					
 					LOGGER.error("Could not create an entry in the data array from a survey response.", dataArrayCreationException);
 					continue;
 				} 
- 				
-				userTrial.setNormalizedData(root);
-				
-				// Save the data
-				
+
+//				// Save the data to the DB
+//				try {
+//					
+//					jdbcTemplate.update(SQL_INSERT_TRIAL_DATA_POINTS, userTrial.getUserId(), userTrial.getNormalizedData().toString());
+//				
+//				} catch(DataAccessException couldNotInsert) {
+//					
+//					LOGGER.error("Could not insert trial data.", couldNotInsert);
+//					throw couldNotInsert;
+//				}
 			}
 		}
 		
-		// For each trial, pass to DPU and persist the DPU results.
+		// One last loop through the trials to perform and save the analysis results
 		
+		CloseableHttpClient httpClient = HttpClients.createDefault();
+		
+		for(UserTrial userTrial : trialsToProcess) {
+			
+			HttpPost httpPost = new HttpPost(OCPU_URL);
+			httpPost.setHeader("Content-Type", "application/json");
+			httpPost.setEntity(new StringEntity(userTrial.getNormalizedData().toString(), Charset.forName("UTF-8")));
+			
+			StringBuilder ocpuResponseBuilder = new StringBuilder();
+			
+			try { 
+				
+				CloseableHttpResponse httpResponse = httpClient.execute(httpPost); 
+				
+				byte[] bytes = new byte[4096];
+				int offset = 0;
+				
+				InputStream is = httpResponse.getEntity().getContent();
+				
+				while(is.read(bytes, offset, 4096) != -1) {
+					ocpuResponseBuilder.append(new String(bytes));
+				}
+				
+				if(httpResponse.getStatusLine().getStatusCode() != 200) {
+					LOGGER.error("Received a non-200 response from OpenCPU: "  + httpResponse.getStatusLine() 
+						+ " Returned data: " + ocpuResponseBuilder);
+					throw new IllegalStateException("Could not process trial results using OpenCPU.");
+				}
+				
+				httpResponse.close();
+				
+				
+			} catch(IOException ioException) {
+				
+				LOGGER.error("Problem with HTTP POST to OpenCPU at " + OCPU_URL, ioException);
+				throw ioException;
+				
+			}
+			
+			LOGGER.info(ocpuResponseBuilder);
+//			
+//			LOGGER.info("Trial results JSON: " + ocpuResponseBuilder);
+//			
+//			// Now store the results
+//			try {
+//				
+//				jdbcTemplate.update(SQL_INSERT_TRIAL_ANALYSIS_RESULTS, userTrial.getUserId(), userTrial.getNormalizedData().toString());
+//			
+//			} catch(DataAccessException couldNotInsert) {
+//				
+//				LOGGER.error("Could not insert trial results.", couldNotInsert);
+//				throw couldNotInsert;
+//			}			
+		}
+		
+		httpClient.close();
 	}
 	
 	/**
@@ -1092,7 +1194,11 @@ public class TrialistAnalysisProcessor {
 			return surveyResponses;
 		}
 		
-		public void processRow(ResultSet rs) throws SQLException { LOGGER.info("processRow()");
+		/**
+		 * For each iteration through the provided ResultSet parameter, pulls out the survey and prompt response data and 
+		 * stores it for later retrieval.
+		 */
+		public void processRow(ResultSet rs) throws SQLException {
 			long surveyKey = rs.getLong("id");
 			String promptId = rs.getString("prompt_id");
 			String response = rs.getString("response");
@@ -1105,7 +1211,7 @@ public class TrialistAnalysisProcessor {
 				currentSurveyResponse = new SurveyResponse(epochMillis, timezone);
 				currentSurveyResponse.addPromptResponse(new PromptResponse(promptId, response));
 				
-			} else if(currentSurveyKey != surveyKey) { LOGGER.info("next survey");
+			} else if(currentSurveyKey != surveyKey) {
 				
 				// Save a deep copy of the previous survey to the list
 				surveyResponses.add(new SurveyResponse(currentSurveyResponse));
