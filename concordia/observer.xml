@@ -16,9 +16,7 @@
         <name>Trialist Data Points</name>
         <description>A list of self-report data points with metadata for providing context to the list.</description>
 
-        <metadata>
-            <timestamp />
-        </metadata>
+        <metadata />
 
         <schema>
 {
@@ -177,9 +175,7 @@
         <name>Trialist Analysis Results</name>
         <description>Contains a map of outcomes to analysis results for each.</description>
 
-        <metadata>
-            <timestamp />
-        </metadata>
+        <metadata />
 
         <schema>
 {
