@@ -3,6 +3,10 @@
     "doc":"Contains a Trialist participant's outcome analysis.",
     "fields": [
         {
+            "name":"setup_survey_id",
+            "type":"string"
+        },
+        {
             "name":"pain",
             "doc":"The analysis results for the pain outcome. NOTE: because ohmage 2.16 is being used for the Trialist project, Concordia $ref values cannot be used. This is why graph_5 and graph_6 are redundantly defined in this schema.",
             "type":"object", 
