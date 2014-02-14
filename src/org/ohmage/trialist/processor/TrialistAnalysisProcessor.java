@@ -55,7 +55,7 @@ public class TrialistAnalysisProcessor {
 	private static final Logger LOGGER = Logger.getLogger(TrialistAnalysisProcessor.class);
 	
 	// The default campaign to process
-	private static final String CAMPAIGN_URN = "urn:campaign:trialist:old:3"; //"urn:campaign:trialist";
+	private static final String CAMPAIGN_URN = "urn:campaign:trialist";
 	
 	// The observer stream metadata for storing normalized self-report and final analysis data
 	private static final String OBSERVER_ID = "io.omh.trialist";
@@ -110,7 +110,6 @@ public class TrialistAnalysisProcessor {
 			" AND observer_stream.stream_id = '" + DATA_STREAM_ID + "'" +  
 			" AND observer_stream.version = '" + DATA_STREAM_VERSION + "'" + 
 			" AND observer_stream_data.user_id = ?)";
-
 	
 	// Find normalized trial results for a given user 
 	private static final String SQL_SELECT_TRIALIST_STREAM_DATA_POINTS 
@@ -193,12 +192,15 @@ public class TrialistAnalysisProcessor {
 	}	
 	
 	/**
-	 * @return how many trials were processed during the run of this program.
+	 * Returns the number of trials processed.
 	 */
 	private int getNumberOfTrialsProcessed() {
 		return numberOfTrialsProcessed;
 	}
 	
+	/**
+	 * Sets up the database connection. 
+	 */
 	private void createjdbcTemplate(String driver, String username, String password, String jdbcUrl) {
 		BasicDataSource dataSource = new BasicDataSource();
 		dataSource.setDriverClassName(driver);
@@ -209,7 +211,10 @@ public class TrialistAnalysisProcessor {
 	}
 		
 	/**
-	 * 
+	 * Performs trial post-processing based on the parameters supplied to main(). Finds completed trials and formats the data into
+	 * a cleaned up data set defined by an observer stream. Passes the formatted data points to analysis software hosted in 
+	 * OpenCPU. Finally, persists both the data points and the analysis results. The analysis results are also defined by an 
+	 * observer stream.
 	 */
 	public void run() throws IOException, JSONException {
 		List<ProcessedTrial> processedTrials = null;
@@ -821,15 +826,15 @@ public class TrialistAnalysisProcessor {
 	}
 	
 	/**
-	 * Main driver method to be invoked from the command-line.
+	 * Performs logging configuration
 	 * 
 	 * If no parameters are provided, this program will process all trials completed the previous day.
 	 *  
-	 * The one parameter is provided, it must be a JSON object containing the keys: reprocess, reprocess-all, trial-end-date, 
-	 * and campaign-urn. reprocess signals to process trials that may have already been processed - a new analysis result set will
-	 * be generated; reprocess-all signals to reprocess all trials regardless of their completion date; trial-end-date indicates 
-	 * that the program should process completed trials for custom end date as opposed to the previous calendar day; campaign-urn
-	 * allows the URN to be customized (e.g., so only mock trials are processed). If reprocess-all is true, the values for reprocess 
+	 * The one parameter is provided, it must be a JSON object containing the keys: also-reprocess, also-reprocess-all, trial-end-date, 
+	 * and campaign-urn. also-reprocess signals to process trials that may have already been processed - a new analysis result set will
+	 * be generated; also-reprocess-all signals to reprocess all trials regardless of their completion date; trial-end-date indicates 
+	 * that the program should process completed trials for a custom end date as opposed to the previous calendar day; campaign-urn
+	 * allows the URN to be customized (e.g., so only mock trials are processed). If also-reprocess-all is true, the values for reprocess 
 	 * and trial-end-date are ignored.
 	 * 
 	 * Invoke with "help" as the first argument to print help text.
@@ -955,13 +960,16 @@ public class TrialistAnalysisProcessor {
 		}
 	}
 	
+	/**
+	 * Prints help text to System.out.
+	 */
 	private static void help() {
 		System.out.println();
 		System.out.println("Invoke with no arguments to process trials for the previous calendar day.");
 		System.out.println("Invoke with \"help\" to show this message.");
 		System.out.println("Invoke with a JSON object to customize the processing. The allowable keys in the object are:");
-		System.out.println("    reprocess, a boolean that indicates whether to process trials where the analysis has been performed;");
-		System.out.println("    reprocess-all, a boolean that indicates whether to reprocess all trials;");
+		System.out.println("    also-reprocess, a boolean that indicates whether to process trials where the analysis has already been performed;");
+		System.out.println("    also-reprocess-all, a boolean that indicates whether to reprocess all trials;");
 		System.out.println("    trial-end-date, a string that is an ISO8601 date (yyyy-mm-dd) which indicates which end date to process trials for;");		
 		System.out.println("    campaign-urn, a string indicating a custom campaign URN to use (e.g., for processing mock trials).");
 		System.out.println();
@@ -1056,7 +1064,7 @@ public class TrialistAnalysisProcessor {
 			this.normalizedData = normalizedData;
 		}
 		
-		// Omitted setupSurveyPrimary key for less verbose debugging
+		// Does not include all instance variables in the interest of brevity
 		@Override
 		public String toString() {
 			return "UserTrial [userId=" + userId + ", trialStartDate="
