@@ -79,7 +79,6 @@
 	    <exclude name="**/test/*Test*" />
 	    <exclude name="**/example/*Example*" />
 	  </fileset>
-	  <fileset dir="." includes="conf/default.properties" />
 	  <zipgroupfileset dir="${library}" includes="**/*.jar" />
 	  <manifest>
         <attribute name="Main-Class" value="org.ohmage.trialist.processor.TrialistAnalysisProcessor"/>
