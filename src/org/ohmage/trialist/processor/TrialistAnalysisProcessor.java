@@ -66,7 +66,8 @@ public class TrialistAnalysisProcessor {
 	private static final String ANALYSIS_RESULTS_STREAM_VERSION = "2013013000";
 	
 	// OpenCPU HTTP connectivity
-	private static final String OCPU_URL = "https://pilots.ohmage.org/ocpu/github/jservadio/TrialistNof1/R/wrap/json";
+	// private static final String OCPU_URL = "https://pilots.ohmage.org/ocpu/github/jservadio/TrialistNof1/R/wrap/json";
+	private static final String OCPU_URL = "https://ocpu.omh.io/ocpu/github/jservadio/TrialistNof1/R/wrap/json";
 	
 	// Processing customization
 	private boolean alsoReprocessTrials;
@@ -301,24 +302,96 @@ public class TrialistAnalysisProcessor {
 			userSetupStartList = Collections.<UserSurveyDate>emptyList();
 		}
 		
-		LOGGER.info("Found " + userSetupStartList.size() + " setup and start survey responses");
 		
-	    // Now determine each user's trial end date
+		LOGGER.info("Original survey list");
 		
-		long currentUserId = -1;                 // assume we'll never have a negative primary key
-		String currentSetupSurveyUuid = null;  
-		JSONObject currentSetupSurvey = null;
+		for(UserSurveyDate usd : userSetupStartList) {
+			LOGGER.info(usd);
+		}
 		
-		List<UserTrial> userTrials = new ArrayList<UserTrial>();
+	// 	LOGGER.info("Found " + userSetupStartList.size() + " setup and start survey responses");
+				
+		// For any given user, there may be more than one setup survey and more than one start survey. A clinician
+		// may set up a user multiple times using the front-end and the most recent setup survey in a repeating list  
+		// of setup surveys should be used. The same issue occurs for the start survey where a user may complete the start
+		// survey multiple times by reinstalling the app. In this case the most recent start survey is what is desired. A
+		// given user may also complete multiple trials, so simply selecting the oldest setup and start surveys will not 
+		// work becaused this may cause earlier trials to be skipped over.
+		
+		List<UserSurveyDate> filteredUserSetupStartList = new ArrayList<UserSurveyDate>();
+
+		long currentUserId = -1;
+		UserSurveyDate currentStart = null;
+		UserSurveyDate currentSetup = null;
 		
 		for(UserSurveyDate userSurveyDate : userSetupStartList) {
 			if(currentUserId == -1)	{
 				// Very weird edge case if the first survey is not a setup survey, but make sure anyway
 				if(userSurveyDate.getSurveyId().equals("setup")) {
 					currentUserId = userSurveyDate.getUserId();
-					currentSetupSurvey = userSurveyDate.getSurvey();
-					currentSetupSurveyUuid = userSurveyDate.getSurveyUuid();
+					currentSetup = userSurveyDate;
 				} 
+			} else {
+				
+				if(currentUserId == userSurveyDate.getUserId()) {
+					if(userSurveyDate.getSurveyId().equals("start")) {
+						if(currentSetup != null) {
+							filteredUserSetupStartList.add(currentSetup);
+							currentSetup = null;
+						}
+						
+						currentStart = userSurveyDate;
+					} else { 
+						currentSetup = userSurveyDate;
+					}
+					
+				} else { // A new user
+					
+					if(userSurveyDate.getSurveyId().equals("setup")) {
+						currentUserId = userSurveyDate.getUserId();
+
+						// Save the previous start survey only if there is one
+						if(currentStart != null) {
+							filteredUserSetupStartList.add(currentStart);
+							currentStart = null;
+						}
+						
+						// And add the new setup survey to the list
+						currentSetup = userSurveyDate;
+						
+					} else { // The user has changed, but their first survey is not the setup survey, so just reset
+						currentUserId = -1;
+						currentStart = null;
+					}
+				}
+			}
+		}
+		
+		// Handle the case where the last item in the original list was a start survey
+		if(currentStart != null) {
+			filteredUserSetupStartList.add(currentStart);
+		}
+		
+		LOGGER.info("Filtered survey list");
+		
+		for(UserSurveyDate usd : filteredUserSetupStartList) {
+			LOGGER.info(usd);
+		}
+		
+	    // Now determine each user's trial end date
+		
+		currentUserId = -1;                 
+		String currentSetupSurveyUuid = null;  
+		JSONObject currentSetupSurvey = null;
+		
+		List<UserTrial> userTrials = new ArrayList<UserTrial>();
+		
+		for(UserSurveyDate userSurveyDate : filteredUserSetupStartList) {
+			if(currentUserId == -1)	{
+				currentUserId = userSurveyDate.getUserId();
+				currentSetupSurvey = userSurveyDate.getSurvey();
+				currentSetupSurveyUuid = userSurveyDate.getSurveyUuid();
+				 
 			} else {
 				if(currentUserId == userSurveyDate.getUserId()) {
 					if(userSurveyDate.getSurveyId().equals("start")) {
@@ -375,14 +448,14 @@ public class TrialistAnalysisProcessor {
 							throw jsonException;
 						}	
 					}
-				} else {
-					if(userSurveyDate.getSurveyId().equals("setup")) {
-						currentUserId = userSurveyDate.getUserId();
+					else { // There is a new setup survey for the same user
 						currentSetupSurvey = userSurveyDate.getSurvey();
 						currentSetupSurveyUuid = userSurveyDate.getSurveyUuid();
-					} else { // The user has changed, but their first survey is not the setup survey, so just reset
-						currentUserId = -1;
 					}
+				} else {
+					currentUserId = userSurveyDate.getUserId();
+					currentSetupSurvey = userSurveyDate.getSurvey();
+					currentSetupSurveyUuid = userSurveyDate.getSurveyUuid();
 				}
 			}
 		}
@@ -430,7 +503,7 @@ public class TrialistAnalysisProcessor {
 				}
 				
 			} catch (DataAccessException dataAccessException) {
-				LOGGER.error("An error occurred when accessing the database.");
+				LOGGER.error("An error occurred when accessing the database.", dataAccessException);
 				throw dataAccessException;
 			}
 		}
@@ -461,8 +534,15 @@ public class TrialistAnalysisProcessor {
 					throw dataAccessException;
 				}
 				
-				LOGGER.info("Found " + surveyResponseHandler.getSurveyResponses().size() 
-					+ " survey responses for the main survey for user " + userTrial.getUserId());
+				if(surveyResponseHandler.getSurveyResponses().size() == 0) {
+					LOGGER.info("Found 0 survey responses for the main survey for user " + userTrial.getUserId() 
+						+ ". The trial will not be processed.");
+					continue;
+					
+				} else {
+					LOGGER.info("Found " + surveyResponseHandler.getSurveyResponses().size() 
+						+ " survey responses for the main survey for user " + userTrial.getUserId());
+				}
 				
 				// Now convert the list of responses into the normalized format
 
@@ -527,7 +607,6 @@ public class TrialistAnalysisProcessor {
 								dateTimeFormatter.withZone(DateTimeZone.forID(surveyResponse.getTimeZoneString()))
 									.print(surveyResponse.getEpochMillis()));
 							
-							
 							if(promptResponse.getPromptId().equals("currentRegimen")) {
 								
 								dataPoint.put("regimen", regimen(Integer.parseInt(promptResponse.getResponse())));
@@ -573,11 +652,18 @@ public class TrialistAnalysisProcessor {
 		CloseableHttpClient httpClient = null;
 		
 		for(UserTrial userTrial : trialsToProcess) {
+			if(userTrial.getNormalizedData() == null) { // No main surveys were found in the processing above 
+				continue;
+			}
+			
 			LOGGER.info("Processing trial " + userTrial);
 			
 			httpClient = HttpClients.createDefault();
 			HttpPost httpPost = new HttpPost(OCPU_URL);
 			httpPost.setHeader("Content-Type", "application/json");
+			
+			// LOGGER.info("Processing the following JSON: " + userTrial.getNormalizedData().toString(4));
+			
 			httpPost.setEntity(new StringEntity(userTrial.getNormalizedData().toString(), Charset.forName("UTF-8")));
 			
 			StringBuilder ocpuResponseBuilder = new StringBuilder();
@@ -1005,6 +1091,24 @@ public class TrialistAnalysisProcessor {
 
 		public JSONObject getSurvey() {
 			return survey;
+		}
+		
+		public String epochMillisAsDate() {
+			try {
+				long epochMillis = survey.getLong("time");
+				return (new DateTime(epochMillis).withZone(DateTimeZone.forID("UTC"))).toString();
+				
+			}
+			catch(JSONException jsonException) {
+				throw new IllegalStateException(jsonException);
+			}
+		}
+
+		// Simplified toString for debugging
+		@Override
+		public String toString() {
+			return "UserSurveyDate [userId=" + userId + ", surveyId="
+					+ surveyId + ", date=" + epochMillisAsDate() + "]";
 		}
 	}
 
