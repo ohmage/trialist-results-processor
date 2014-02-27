@@ -21,7 +21,7 @@ public class ConfigurationFileImport {
 	 * The location of the default configuration file.
 	 */
 	private static final String CONFIG_FILE_DEFAULT = 
-		"./conf/default.properties";
+		"/etc/trialist/conf/default.properties";
 		
 	/**
 	 * The properties merged between the defaults and the custom ones.
