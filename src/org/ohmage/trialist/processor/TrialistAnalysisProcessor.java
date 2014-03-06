@@ -130,7 +130,7 @@ public class TrialistAnalysisProcessor {
 		"FROM prompt_response pr, survey_response sr " +
 		"WHERE pr.survey_response_id = sr.id " +
 			"AND sr.survey_id = 'main' " +
-			"AND sr.campaign_id = (SELECT id FROM campaign where urn = '" + CAMPAIGN_URN + "') " +
+			"AND sr.campaign_id = (SELECT id FROM campaign where urn = ?) " +
 			"AND DATE(FROM_UNIXTIME(sr.epoch_millis / 1000)) BETWEEN ? AND ? " +
 			"AND sr.user_id = ? " +
 			"ORDER BY user_id, epoch_millis asc";
@@ -524,7 +524,8 @@ public class TrialistAnalysisProcessor {
 					
 					jdbcTemplate.query(
 						SQL_SELECT_MAIN_SURVEY_PROMPT_RESPONSES_FOR_USER, 
-						new Object[] { yearMonthDayFormatter.print(userTrial.getTrialStartDate()), 
+						new Object[] { campaignUrn,
+									   yearMonthDayFormatter.print(userTrial.getTrialStartDate()), 
 									   yearMonthDayFormatter.print(userTrial.getTrialEndDate()), 
 									   userTrial.getUserId()  },
 						surveyResponseHandler
@@ -842,7 +843,7 @@ public class TrialistAnalysisProcessor {
 	 * If reprocessTrials is false, this method filters out any trial that has already been processed. 
 	 */
 	private List<UserTrial> filterTrialsForReprocessing(List<UserTrial> trialsToCheck, List<ProcessedTrial> processedTrials) { 
-		if(! alsoReprocessTrials) {
+		if(! alsoReprocessTrials && ! alsoReprocessAllTrials) {
 			// Use an iterator because the list might be modified as it is traversed
 			Iterator<UserTrial> iterator = trialsToCheck.iterator();
 			while(iterator.hasNext()) {
