@@ -138,23 +138,23 @@ public class TrialistAnalysisProcessor {
 	// Save the normalized trial data points
 	private static final String SQL_INSERT_TRIAL_DATA_POINTS = 
 		"INSERT INTO observer_stream_data " +
-		"(user_id, observer_stream_link_id, data) VALUES " +
+		"(user_id, observer_stream_link_id, time, time_offset, time_adjusted, time_zone, data) VALUES " +
 			"(?, " +
 			"(SELECT osl.id FROM observer_stream_link osl, observer_stream os, observer o WHERE o.observer_id = '" + OBSERVER_ID +
 				"' AND o.version = '" + OBSERVER_VERSION + "' AND os.stream_id = '" + DATA_STREAM_ID +
 				"' AND os.version = '" + DATA_STREAM_VERSION + "' AND osl.observer_id = o.id AND osl.observer_stream_id = os.id), " +
-			"?)";
+			"?, ?, ?, ?, ?)";
 
 	// Save the trial analysis results
 	private static final String SQL_INSERT_TRIAL_ANALYSIS_RESULTS = 
 		"INSERT INTO observer_stream_data " +
-		"(user_id, observer_stream_link_id, data) VALUES " +
+		"(user_id, observer_stream_link_id, time, time_offset, time_adjusted, time_zone, data) VALUES " +
 			"(?, " +
 			"(SELECT osl.id FROM observer_stream_link osl, observer_stream os, observer o WHERE o.observer_id = '" + OBSERVER_ID +
 				"' AND o.version = '" + OBSERVER_VERSION + "' AND os.stream_id = '" + ANALYSIS_RESULTS_STREAM_ID + 
 				"' AND os.version = '" + ANALYSIS_RESULTS_STREAM_VERSION + "' AND osl.observer_id = o.id " +
 				"AND osl.observer_stream_id = os.id), " +
-			"?)";
+			"?, ?, ?, ?, ?)";
 	
 	/**
 	 * Create a processor that will process the previous day's completed trials for the default Trialist campaign.
@@ -638,7 +638,13 @@ public class TrialistAnalysisProcessor {
 				// Save the data to the DB
 				try {
 					
-					jdbcTemplate.update(SQL_INSERT_TRIAL_DATA_POINTS, userTrial.getUserId(), userTrial.getNormalizedData().toString());
+					long time = System.currentTimeMillis();
+					int timeOffset = DateTimeZone.getDefault().getOffset(time); 
+					long timeAdjusted = time + timeOffset;
+					String timeZoneString =  DateTimeZone.getDefault().getID();
+					
+					jdbcTemplate.update(SQL_INSERT_TRIAL_DATA_POINTS, userTrial.getUserId(), 
+							time, timeOffset, timeAdjusted, timeZoneString, userTrial.getNormalizedData().toString());
 				
 				} catch(DataAccessException couldNotInsert) {
 					
@@ -719,7 +725,12 @@ public class TrialistAnalysisProcessor {
 					throw new IllegalStateException("Could not add setup survey ID to JSON returned from OpenCPU", jsonException);
 				}
 				
-				jdbcTemplate.update(SQL_INSERT_TRIAL_ANALYSIS_RESULTS, userTrial.getUserId(), analysisJsonString);
+				long time = System.currentTimeMillis();
+				int timeOffset = DateTimeZone.getDefault().getOffset(time); 
+				long timeAdjusted = time + timeOffset;
+				String timeZoneString =  DateTimeZone.getDefault().getID();
+				
+				jdbcTemplate.update(SQL_INSERT_TRIAL_ANALYSIS_RESULTS, userTrial.getUserId(), time, timeOffset, timeAdjusted, timeZoneString, analysisJsonString);
 			
 			} catch(DataAccessException couldNotInsert) {
 				
