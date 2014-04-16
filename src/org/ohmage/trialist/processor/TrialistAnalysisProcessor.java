@@ -467,7 +467,7 @@ public class TrialistAnalysisProcessor {
 		// Filter out all trials that should not be processed
 		List<UserTrial> trialsToProcess = filterTrialsForReprocessing(filterTrialsByDate(userTrials), processedTrials);
  		
-		LOGGER.info(trialsToProcess.size() + " trial(s) will be processed");
+//		LOGGER.info(trialsToProcess.size() + " trial(s) will be processed");
 		
 //		for(UserTrial userTrial : trialsToProcess) {
 //			LOGGER.info(userTrial.toString());
@@ -510,8 +510,7 @@ public class TrialistAnalysisProcessor {
 		
 		// Create the normalized data stream for each trial 
 		for(UserTrial userTrial : trialsToProcess) {
-			if(userTrial.getNormalizedData() == null) { // If this trial has not already been processed, create the intermediate 
-				                                        // representation of the data and store it
+			if(userTrial.getNormalizedData() == null) { // If the trial data has not been normalized, normalize it.
 				
 				SurveyReponseRowCallbackHandler surveyResponseHandler = new SurveyReponseRowCallbackHandler();
 				
@@ -553,6 +552,7 @@ public class TrialistAnalysisProcessor {
 				
 				int regimenDuration = -1;
 				int numberOfCycles = -1;
+				int totalDaysInTrial = Days.daysBetween(userTrial.getTrialStartDate(), userTrial.getTrialEndDate()).getDays();
 				
 				// Metadata Section
 				
@@ -587,17 +587,40 @@ public class TrialistAnalysisProcessor {
 					
 					int cycleLength = regimenDuration * 2;
 					DateTime surveyDateTime = null;
+					boolean participantStartedOnDayZero = false;
 					
 					for(SurveyResponse surveyResponse : surveyResponses) {
 						// Calculate the current cycle which is based on the number of days the participant has been participating
 						// divided by the cycleLength
-						
+																		
+						// Grab the time the survey was taken and normalize it to UTC so it can be compared 
+						// to the start date.
 						surveyDateTime = new DateTime(
-							surveyResponse.getEpochMillis()).withZone(DateTimeZone.forID("UTC")).withTime(0, 0, 0, 0);
+							surveyResponse.getEpochMillis(), DateTimeZone.forID(surveyResponse.getTimeZoneString()))
+								.withZone(DateTimeZone.forID("UTC"))
+								.withTime(0, 0, 0, 0);
 						
 						int daysInTrial = Days.daysBetween(userTrial.getTrialStartDate(), surveyDateTime).getDays();
-                        int cycle = (daysInTrial / cycleLength) + 1;
 						
+						// Handle the case where the participant started filling out surveys on the same
+						// day they clicked "Start Trial".
+						if(daysInTrial == 0) {
+							participantStartedOnDayZero = true;
+						}
+						if(participantStartedOnDayZero) {
+							daysInTrial++;
+						}
+						
+						int cycle = 0;
+						
+						if(daysInTrial % cycleLength == 0) {
+							cycle = daysInTrial / cycleLength;
+						} else {
+							cycle = daysInTrial / cycleLength + 1;
+						}
+						
+                        LOGGER.info("Days into trial: " + daysInTrial + " ... Current cycle: " + cycle);
+                        
 						List<PromptResponse> promptResponses = surveyResponse.getPromptResponses();
 						JSONObject dataPoint = new JSONObject();
 						
@@ -775,7 +798,7 @@ public class TrialistAnalysisProcessor {
 	}
 	
 	/**
-	 * Map the number of cycles prompt response  (the <key> element in the prompt's XML config) to the actual number of cycles.
+	 * Map the regimen prompt response  (the <key> element in the prompt's XML config) to a regimen string.
 	 * Magic numbers ahoy!
 	 */
 	private String regimen(int key) {
