@@ -703,12 +703,12 @@ public class TrialistAnalysisProcessor {
 				CloseableHttpResponse httpResponse = httpClient.execute(httpPost); 
 				
 				byte[] bytes = new byte[4096];
-				int offset = 0;
+				int amountRead = 0;
 				
 				InputStream is = httpResponse.getEntity().getContent();
 				
-				while(is.read(bytes, offset, 4096) != -1) {
-					ocpuResponseBuilder.append(new String(bytes));
+				while((amountRead = is.read(bytes, 0, 4096)) != -1) {
+					ocpuResponseBuilder.append(new String(bytes, 0, amountRead));
 				}
 				
 				if(httpResponse.getStatusLine().getStatusCode() != 200) {
