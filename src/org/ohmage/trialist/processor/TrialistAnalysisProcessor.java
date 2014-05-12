@@ -162,8 +162,8 @@ public class TrialistAnalysisProcessor {
 	public TrialistAnalysisProcessor() {
 		alsoReprocessTrials = false;
 		alsoReprocessAllTrials = false;
-		dateTrialEnded = new DateTime(System.currentTimeMillis() - 8640000).withZone(DateTimeZone.forID("UTC")).withTime(0, 0, 0, 0);
-		yesterday = new DateTime(System.currentTimeMillis() - 8640000).withZone(DateTimeZone.forID("UTC")).withTime(0, 0, 0, 0);
+		dateTrialEnded = new DateTime(System.currentTimeMillis() - 86400000).withZone(DateTimeZone.forID("UTC")).withTime(0, 0, 0, 0);
+		yesterday = new DateTime(System.currentTimeMillis() - 86400000).withZone(DateTimeZone.forID("UTC")).withTime(0, 0, 0, 0);
 		campaignUrn = CAMPAIGN_URN;
 		LOGGER.info("Processing trials for the campaign " + campaignUrn + " and trial end date " + dateTrialEnded);
 	}
@@ -207,7 +207,7 @@ public class TrialistAnalysisProcessor {
 		dataSource.setDriverClassName(driver);
 		dataSource.setUsername(username);
 		dataSource.setPassword(password);
-		dataSource.setUrl(jdbcUrl);
+		dataSource.setUrl(jdbcUrl); 
 		jdbcTemplate = new JdbcTemplate(dataSource);
 	}
 		
@@ -552,7 +552,6 @@ public class TrialistAnalysisProcessor {
 				
 				int regimenDuration = -1;
 				int numberOfCycles = -1;
-				int totalDaysInTrial = Days.daysBetween(userTrial.getTrialStartDate(), userTrial.getTrialEndDate()).getDays();
 				
 				// Metadata Section
 				
@@ -856,14 +855,16 @@ public class TrialistAnalysisProcessor {
 		for(UserTrial userTrial : trialsToCheck) {
 			// Don't process trials that are not finished yet
 			if(userTrial.getTrialEndDate().compareTo(yesterday) <= 0) {
-				 
+
 				if(alsoReprocessAllTrials) {
 					// Any finished trial will be processed
 					trialsToProcess.add(userTrial);
 					
 				} else {
+					
 					// Otherwise only trials ending on the end date parameter to this program will be processed
 					if(userTrial.getTrialEndDate().equals(dateTrialEnded)) {
+						
 						trialsToProcess.add(userTrial);
 					}
 				}	
